@@ -6,7 +6,7 @@ from opentelemetry.trace import Span
 from opentelemetry.context import attach, set_value, get_value
 from monocle_apptrace.constants import azure_service_map, aws_service_map
 from json.decoder import JSONDecodeError
-
+logger = logging.getLogger()
 embedding_model_context = {}
 
 def set_span_attribute(span, name, value):
@@ -54,7 +54,6 @@ def resolve_from_alias(my_map, alias):
 
 def load_output_processor(wrapper_method, attributes_config_base_path):
     """Load the output processor from a file if the file path is provided and valid."""
-    logger = logging.getLogger()
     output_processor_file_path = wrapper_method["output_processor"][0]
     logger.info(f'Output processor file path is: {output_processor_file_path}')
 
@@ -79,13 +78,17 @@ def get_wrapper_methods_config(
         wrapper_methods_config_path: str,
         attributes_config_base_path: str = None
 ):
-    parent_dir = os.path.dirname(os.path.join(os.path.dirname(__file__), '..'))
-    wrapper_methods_config = load_wrapper_methods_config_from_file(
-        wrapper_methods_config_path=os.path.join(parent_dir, wrapper_methods_config_path))
-    process_wrapper_method_config(
-        wrapper_methods_config=wrapper_methods_config,
-        attributes_config_base_path=attributes_config_base_path)
-    return wrapper_methods_config
+    try:
+        parent_dir = os.path.dirname(os.path.join(os.path.dirname(__file__), '..'))
+        wrapper_methods_config = load_wrapper_methods_config_from_file(
+            wrapper_methods_config_path=os.path.join(parent_dir, wrapper_methods_config_path))
+        process_wrapper_method_config(
+            wrapper_methods_config=wrapper_methods_config,
+            attributes_config_base_path=attributes_config_base_path)
+        return wrapper_methods_config
+    except Exception as ex:
+        logger.error(f"Error {ex} loading from Monocle wrapper methods from file {attributes_config_base_path}/{wrapper_methods_config}")
+        return []
 
 def load_wrapper_methods_config_from_file(
         wrapper_methods_config_path: str):

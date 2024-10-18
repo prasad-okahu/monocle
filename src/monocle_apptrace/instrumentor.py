@@ -1,4 +1,4 @@
-import logging
+import logging, os
 from typing import Collection, List
 from wrapt import wrap_function_wrapper
 from opentelemetry.trace import get_tracer
@@ -13,6 +13,8 @@ from monocle_apptrace.utils import process_wrapper_method_config
 from monocle_apptrace.wrap_common import SESSION_PROPERTIES_KEY
 from monocle_apptrace.wrapper import INBUILT_METHODS_LIST, WrapperMethod
 from monocle_apptrace.exporters.monocle_exporters import get_monocle_exporter
+from monocle_apptrace.utils import get_wrapper_methods_config
+MONOCLE_DEFAULT_CUSTOM_METHODS_FILE = "custom_methods.json"
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +30,11 @@ class MonocleInstrumentor(BaseInstrumentor):
             user_wrapper_methods: list[WrapperMethod] = None) -> None:
         self.user_wrapper_methods = user_wrapper_methods or []
         super().__init__()
+
+    def load_custom_methods() -> list[WrapperMethod]:
+        config_directory = os.getenv("MONOCLE_CONFIG_DIR", ".")
+        user_method_file = os.getenv("MONOCLE_WRAPPER_METHODS_FILE", MONOCLE_DEFAULT_CUSTOM_METHODS_FILE)
+        return get_wrapper_methods_config(user_method_file, config_directory)
 
     def instrumentation_dependencies(self) -> Collection[str]:
         return _instruments
@@ -46,7 +53,8 @@ class MonocleInstrumentor(BaseInstrumentor):
                 "output_processor": method.output_processor
             } for method in self.user_wrapper_methods]
         process_wrapper_method_config(user_method_list)
-        final_method_list = user_method_list + INBUILT_METHODS_LIST
+        custom_methods = self.load_custom_methods()
+        final_method_list = user_method_list + custom_methods + INBUILT_METHODS_LIST
 
         for wrapped_method in final_method_list:
             try:

@@ -18,9 +18,9 @@ def get_monocle_exporter() -> SpanExporter:
     except Exception as ex:
         warnings.warn(f"Unsupported Monocle span exporter setting {exporter_name}, using default FileSpanExporter.")
         return FileSpanExporter()
-    exporter_module = import_module(exporter_class_path.get("module"))
-    exporter_class = getattr(exporter_module, exporter_class_path.get("class"))
     try:
+        exporter_module = import_module(exporter_class_path.get("module"))
+        exporter_class = getattr(exporter_module, exporter_class_path.get("class"))
         return exporter_class()
     except Exception as ex:
         warnings.warn(f"Unable to set Monocle span exporter to {exporter_name}, error {ex}. Using ConsoleSpanExporter")
