@@ -6,11 +6,11 @@ from monocle_apptrace.exporters.log_exporter import LogSpanExporter
 from monocle_apptrace.exporters.file_exporter import FileSpanExporter
 
 monocle_exporters:Dict[str, Any] = [
-    {"s3": {"module": "monocle_apptrace.exporters.aws.s3_exporter", "class": "S3SpanExporter"}},
-    {"blob": {"module":"monocle_apptrace.exporters.azure.blob_exporter", "class": "AzureBlobSpanExporter"}},
-    {"okahu": {"module":"monocle_apptrace.exporters.okahu.okahu_exporter", "class": "OkahuSpanExporter"}},
-    {"file:": {"module":"monocle_apptrace.exporters.file_exporter", "class": "FileSpanExporter"}},
-    {"log:": {"module":"monocle_apptrace.exporters.log_exporter", "class": "LogSpanExporter"}}
+    "s3": {"module": "monocle_apptrace.exporters.aws.s3_exporter", "class": "S3SpanExporter"},
+    "blob": {"module":"monocle_apptrace.exporters.azure.blob_exporter", "class": "AzureBlobSpanExporter"},
+    "okahu": {"module":"monocle_apptrace.exporters.okahu.okahu_exporter", "class": "OkahuSpanExporter"},
+    "file:": {"module":"monocle_apptrace.exporters.file_exporter", "class": "FileSpanExporter"},
+    "log:": {"module":"monocle_apptrace.exporters.log_exporter", "class": "LogSpanExporter"}
 ]
 
 def get_monocle_exporter() -> SpanExporter:
