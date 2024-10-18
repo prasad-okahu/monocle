@@ -9,7 +9,7 @@ import requests
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 
-from okahu_apptrace.processor import ExportTaskProcessor
+from monocle_apptrace.exporters.export_processor import ExportTaskProcessor
 
 REQUESTS_SUCCESS_STATUS_CODES = (200, 202)
 OKAHU_PROD_INGEST_ENDPOINT = "https://ingest.okahu.co/api/v1/trace/ingest"
