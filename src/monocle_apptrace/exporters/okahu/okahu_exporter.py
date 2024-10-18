@@ -9,8 +9,6 @@ import requests
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 
-from monocle_apptrace.exporters.export_processor import ExportTaskProcessor
-
 REQUESTS_SUCCESS_STATUS_CODES = (200, 202)
 OKAHU_PROD_INGEST_ENDPOINT = "https://ingest.okahu.co/api/v1/trace/ingest"
 
@@ -22,7 +20,6 @@ class OkahuSpanExporter(SpanExporter):
         endpoint: Optional[str] = None,
         timeout: Optional[int] = None,
         session: Optional[requests.Session] = None,
-        task_processor: ExportTaskProcessor = None
     ):
         """Okahu exporter."""
         okahu_endpoint: str = os.environ.get("OKAHU_INGESTION_ENDPOINT", OKAHU_PROD_INGEST_ENDPOINT)
@@ -36,10 +33,6 @@ class OkahuSpanExporter(SpanExporter):
         self._closed = False
         self.timeout = timeout or 15
         
-        self.task_processor = task_processor or None
-        if task_processor is not None:
-            task_processor.start()
-
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
         # After the call to Shutdown subsequent calls to Export are
         # not allowed and should return a Failure result
@@ -82,10 +75,6 @@ class OkahuSpanExporter(SpanExporter):
             logger.debug("spans succesfully exported to okahu")
             return SpanExportResult.SUCCESS 
         
-        # if async task function is present, then push the request to asnc task
-        if self.task_processor is not None and callable(self.task_processor.queue_task):
-            self.task_processor.queue_task(send_spans_to_okahu, span_list)
-            return SpanExportResult.SUCCESS
         return send_spans_to_okahu(span_list)
 
     def shutdown(self) -> None:
