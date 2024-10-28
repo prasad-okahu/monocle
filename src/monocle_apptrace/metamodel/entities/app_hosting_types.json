@@ -2,23 +2,23 @@
     "entity" : "app_hosting",
     "types": [
         {
-            "name": "aws_lambda",
+            "name": "aws.lambda",
             "attributes" : []
         },
         {
-            "name": "aws_sagemaker",
+            "name": "aws.sagemaker",
             "attributes" : []
         },
         {
-            "name": "azure_func",
+            "name": "azure.func",
             "attributes" : []
         },
         {
-            "name": "azure_mlw",
+            "name": "azure.mlw",
             "attributes" : []
         },
         {
-            "name": "github_codespace",
+            "name": "github.codespace",
             "attributes" : []
         },
         {
