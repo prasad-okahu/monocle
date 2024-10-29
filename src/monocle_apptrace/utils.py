@@ -4,7 +4,7 @@ from importlib import import_module
 import os
 from opentelemetry.trace import Span
 from opentelemetry.context import attach, set_value, get_value
-from monocle_apptrace.constants import azure_service_map, aws_service_map
+from monocle_apptrace.constants import service_maps
 from json.decoder import JSONDecodeError
 
 embedding_model_context = {}
@@ -118,12 +118,10 @@ def get_wrapper_method(package_name: str, method_name: str):
     return getattr(wrapper_module, method_name)
 
 def update_span_with_infra_name(span: Span, span_key: str):
-    for key, val in azure_service_map.items():
-        if key in os.environ:
-            span.set_attribute(span_key, val)
-    for key, val in aws_service_map.items():
-        if key in os.environ:
-            span.set_attribute(span_key, val)
+    for service_map in service_maps:
+        for key, val in service_map.items():
+            if key in os.environ:
+                span.set_attribute(span_key, val)
 
 def set_embedding_model(model_name: str):
     """

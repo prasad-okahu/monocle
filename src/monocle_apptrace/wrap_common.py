@@ -16,7 +16,7 @@ PROMPT_OUTPUT_KEY = "data.output"
 QUERY = "question"
 RESPONSE = "response"
 SESSION_PROPERTIES_KEY = "session"
-INFRA_SERVICE_KEY = "infra_service_name"
+INFRA_SERVICE_KEY = "entity.1.infra_service_name"
 
 TYPE = "type"
 PROVIDER = "provider_name"

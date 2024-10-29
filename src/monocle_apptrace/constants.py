@@ -23,3 +23,9 @@ azure_service_map = {
 aws_service_map = {
     AWS_LAMBDA_ENV_NAME: AWS_LAMBDA_SERVICE_NAME
 }
+
+git_service_map = {
+    GITHUB_CODESPAE_ENV_NAME: GITHUB_CODESPASE_SERVICE_NAME
+}
+
+service_maps = [azure_service_map, aws_service_map, git_service_map]
