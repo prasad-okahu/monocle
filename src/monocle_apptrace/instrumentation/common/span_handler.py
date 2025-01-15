@@ -27,7 +27,7 @@ class SpanHandler:
     def validate(self, to_wrap, wrapped, instance, args, kwargs):
         pass
 
-    def pre_task_processing(self, to_wrap, wrapped, instance, args, span):
+    def pre_task_processing(self, to_wrap, wrapped, instance, args, kwargs, span):
         if self.__is_root_span(span):
             try:
                 sdk_version = version("monocle_apptrace")
@@ -36,9 +36,7 @@ class SpanHandler:
                 logger.warning("Exception finding monocle-apptrace version.")
         if "pipeline" in to_wrap['package']:
             set_attribute(QUERY, args[0]['prompt_builder']['question'])
-
-
-
+ 
     def post_task_processing(self, to_wrap, wrapped, instance, args, kwargs, result, span):
         pass
 
@@ -152,3 +150,34 @@ class SpanHandler:
                 return curr_span.parent is None or get_current().get("root_span_id") == curr_span.parent.span_id
         except Exception as e:
             logger.warning(f"Error finding root span: {e}")
+
+    @staticmethod
+    def _get_task_action_processor(to_wrap, process_type):
+        processor = None
+        if to_wrap.get(process_type):
+            try:
+                pre_processor_module = to_wrap[process_type]['module']
+                pre_processor_function = to_wrap[process_type]['method']
+                module_path = pre_processor_module.split('.')
+                if len(module_path) > 1:
+                    module = __import__(pre_processor_module, fromlist=[module_path[-1]])
+                    processor = getattr(module, pre_processor_function)
+            except Exception as e:
+                logger.warn(f"Error getting {process_type}: {e}")
+        return processor
+
+    def pre_task_action(self, to_wrap, wrapped, instance, args, kwargs):
+        pre_processor = SpanHandler._get_task_action_processor(to_wrap, "pre_processor")
+        if pre_processor:
+            try:
+                pre_processor(args, kwargs)
+            except Exception as e:
+                logger.warn(f"Error executing pre_processor: {e}")
+
+    def post_task_action(self, tracer, to_wrap, wrapped, instance, args, kwargs, result):
+        post_processor = SpanHandler._get_task_action_processor(to_wrap, "post_processor")
+        if post_processor:
+            try:
+                post_processor(tracer, to_wrap, wrapped, instance, args, kwargs, result)
+            except Exception as e:
+                logger.warn(f"Error executing pre_processor: {e}")

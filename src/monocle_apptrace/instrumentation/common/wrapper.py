@@ -28,18 +28,19 @@ def task_wrapper(tracer: Tracer, handler: SpanHandler, to_wrap, wrapped, instanc
 
     handler.validate(to_wrap, wrapped, instance, args, kwargs)
     handler.set_context_properties(to_wrap, wrapped, instance, args, kwargs)
+    
+    handler.pre_task_action(to_wrap, wrapped, instance, args, kwargs)
 
     if to_wrap.get('skip_span'):
         return_value = wrapped(*args, **kwargs)
-        _helper.botocore_processor(tracer, to_wrap, wrapped, instance, args, kwargs, return_value)
-        return return_value
+    else:
+        with tracer.start_as_current_span(name) as span:
+            handler.pre_task_processing(to_wrap, wrapped, instance, args, kwargs, span)
+            return_value = wrapped(*args, **kwargs)
+            handler.hydrate_span(to_wrap, wrapped, instance, args, kwargs, return_value, span)
+            handler.post_task_processing(to_wrap, wrapped, instance, args, kwargs, return_value, span)
 
-    with tracer.start_as_current_span(name) as span:
-        handler.pre_task_processing(to_wrap, wrapped, instance, args, span)
-        return_value = wrapped(*args, **kwargs)
-        handler.hydrate_span(to_wrap, wrapped, instance, args, kwargs, return_value, span)
-        handler.post_task_processing(to_wrap, wrapped, instance, args, kwargs, return_value, span)
-
+    handler.post_task_action(tracer, to_wrap, wrapped, instance, args, kwargs, return_value)
     return return_value
 
 

@@ -31,6 +31,8 @@ monocle_tracer_provider: TracerProvider = None
 
 MONOCLE_INSTRUMENTOR = "monocle_apptrace"
 
+current_token = None
+
 class MonocleInstrumentor(BaseInstrumentor):
     workflow_name: str = ""
     user_wrapper_methods: list[Union[dict,WrapperMethod]] = []
@@ -110,6 +112,7 @@ class MonocleInstrumentor(BaseInstrumentor):
 
 def setup_monocle_telemetry(
         workflow_name: str,
+        web_app = None,
         span_processors: List[SpanProcessor] = None,
         span_handlers: Dict[str,SpanHandler] = None,
         wrapper_methods: List[Union[dict,WrapperMethod]] = None,
@@ -137,6 +140,22 @@ def setup_monocle_telemetry(
     # instrumentor.app_name = workflow_name
     if not instrumentor.is_instrumented_by_opentelemetry:
         instrumentor.instrument(trace_provider=trace_provider)
+    if web_app:
+        app_type = type(web_app).__name__
+        if app_type == "Flask":
+            try:
+                from opentelemetry.instrumentation.flask import FlaskInstrumentor
+                FlaskInstrumentor().instrument_app(web_app) # .instrument_app(web_app)
+            except Exception as ex:
+                logger.info(f"Failed to instrument Flask app: {str(ex)}")
+#   else:
+#       try:
+#           from opentelemetry.instrumentation.requests import RequestsInstrumentor
+#          RequestsInstrumentor().instrument()
+#       except Exception as ex:
+#           logger.debug(f"Failed to instrument requests: {str(ex)}")
+
+    propagate_trace_id()
 
     return instrumentor
 
@@ -151,9 +170,12 @@ def on_processor_start(span: Span, parent_context):
 def set_context_properties(properties: dict) -> None:
     attach(set_value(SESSION_PROPERTIES_KEY, properties))
 
-
 def propagate_trace_id(traceId = "", use_trace_context = False):
+    global current_token 
     try:
+        if current_token is not None:
+            detach(current_token)
+            current_token = None
         if traceId.startswith("0x"):
             traceId = traceId.lstrip("0x")
         tracer = get_tracer(instrumenting_module_name= MONOCLE_INSTRUMENTOR, tracer_provider= monocle_tracer_provider)
@@ -165,11 +187,10 @@ def propagate_trace_id(traceId = "", use_trace_context = False):
         span = tracer.start_span(name = "parent_placeholder_span", context= _parent_span_context)
         updated_span_context = set_span_in_context(span=span, context= _parent_span_context)
         updated_span_context = set_value("root_span_id", span.get_span_context().span_id, updated_span_context)
-        token = attach(updated_span_context)
-
+        current_token = attach(updated_span_context)
         span.end()
         tracer.id_generator = initial_id_generator
-        return token
+        return current_token
     except:
         logger.warning("Failed to propagate trace id")
     return
@@ -177,7 +198,6 @@ def propagate_trace_id(traceId = "", use_trace_context = False):
 
 def propagate_trace_id_from_traceparent():
     propagate_trace_id(use_trace_context = True)
-
 
 def stop_propagate_trace_id(token) -> None:
     try:
