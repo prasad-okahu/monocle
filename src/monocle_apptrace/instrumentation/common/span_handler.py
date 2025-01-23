@@ -168,11 +168,13 @@ class SpanHandler:
 
     def pre_task_action(self, to_wrap, wrapped, instance, args, kwargs):
         pre_processor = SpanHandler._get_task_action_processor(to_wrap, "pre_processor")
+        pre_response = None
         if pre_processor:
             try:
-                pre_processor(args, kwargs)
+                pre_response = pre_processor(args, kwargs)
             except Exception as e:
                 logger.warn(f"Error executing pre_processor: {e}")
+        return pre_response
 
     def post_task_action(self, tracer, to_wrap, wrapped, instance, args, kwargs, result):
         post_processor = SpanHandler._get_task_action_processor(to_wrap, "post_processor")
