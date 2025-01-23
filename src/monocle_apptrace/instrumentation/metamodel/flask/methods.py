@@ -11,6 +11,10 @@ FLASK_METHODS = [
             "module": "monocle_apptrace.instrumentation.metamodel.flask._helper",
             "method": "flask_pre_processor"
         },
+        "post_processor": {
+            "module": "monocle_apptrace.instrumentation.metamodel.flask._helper",
+            "method": "flask_post_processor"
+        },
         "skip_span": True
     }
 ]
