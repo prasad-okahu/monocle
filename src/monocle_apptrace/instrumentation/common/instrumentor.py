@@ -143,7 +143,7 @@ def setup_monocle_telemetry(
         instrumentor.instrument(trace_provider=trace_provider)
 
     if start_new_trace:
-        propagate_trace_id()
+        start_trace()
 
     return instrumentor
 
@@ -158,10 +158,10 @@ def on_processor_start(span: Span, parent_context):
 def set_context_properties(properties: dict) -> None:
     attach(set_value(SESSION_PROPERTIES_KEY, properties))
 
-def propagate_trace_id(traceId = "", use_trace_context = False):
+def start_trace(traceId = "", use_trace_context = False):
     global current_token 
     try:
-        stop_propagate_trace_id()
+        stop_trace()
         if traceId.startswith("0x"):
             traceId = traceId.lstrip("0x")
         tracer = get_tracer(instrumenting_module_name= MONOCLE_INSTRUMENTOR, tracer_provider= monocle_tracer_provider)
@@ -182,9 +182,9 @@ def propagate_trace_id(traceId = "", use_trace_context = False):
 
 
 def propagate_trace_id_from_traceparent():
-    propagate_trace_id(use_trace_context = True)
+    start_trace(use_trace_context = True)
 
-def stop_propagate_trace_id() -> None:
+def stop_trace() -> None:
     global current_token
     try:
         if current_token is not None:
