@@ -11,6 +11,15 @@ U = TypeVar('U')
 logger = logging.getLogger(__name__)
 
 embedding_model_context = {}
+global_context = None
+
+def set_global_context(context):
+    global global_context
+    global_context = context
+
+def get_global_context():
+    global global_context
+    return global_context
 
 def set_span_attribute(span, name, value):
     if value is not None:
@@ -41,6 +50,7 @@ def with_tracer_wrapper(func):
 
     def _with_tracer(tracer, handler, to_wrap):
         def wrapper(wrapped, instance, args, kwargs):
+            global global_context
             try:
                 # get and log the parent span context if injected by the application
                 # This is useful for debugging and tracing of Azure functions

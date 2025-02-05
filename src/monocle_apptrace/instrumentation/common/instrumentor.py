@@ -2,6 +2,7 @@ import logging
 from typing import Collection, Dict, List, Union
 import random
 import uuid
+from threading import local
 from opentelemetry import trace
 from opentelemetry.context import attach, get_value, set_value, get_current, detach
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
@@ -20,6 +21,7 @@ from monocle_apptrace.instrumentation.common.wrapper_method import (
     DEFAULT_METHODS_LIST,
     WrapperMethod,
 )
+from monocle_apptrace.instrumentation.common import utils
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +33,8 @@ monocle_tracer_provider: TracerProvider = None
 
 MONOCLE_INSTRUMENTOR = "monocle_apptrace"
 
-current_token = None
+token_data = local()
+token_data.current_token = None
 
 class MonocleInstrumentor(BaseInstrumentor):
     workflow_name: str = ""
@@ -143,7 +146,7 @@ def setup_monocle_telemetry(
         instrumentor.instrument(trace_provider=trace_provider)
 
     if start_new_trace:
-        start_trace()
+        start_trace(set_global_context=True)
 
     return instrumentor
 
@@ -158,38 +161,33 @@ def on_processor_start(span: Span, parent_context):
 def set_context_properties(properties: dict) -> None:
     attach(set_value(SESSION_PROPERTIES_KEY, properties))
 
-def start_trace(traceId = "", use_trace_context = False):
-    global current_token 
+def start_trace(traceId = "", set_global_context:bool = False):
     try:
         stop_trace()
         if traceId.startswith("0x"):
             traceId = traceId.lstrip("0x")
         tracer = get_tracer(instrumenting_module_name= MONOCLE_INSTRUMENTOR, tracer_provider= monocle_tracer_provider)
         initial_id_generator = tracer.id_generator
-        _parent_span_context = get_current() if use_trace_context else None
         if traceId and is_valid_trace_id_uuid(traceId):
             tracer.id_generator = FixedIdGenerator(uuid.UUID(traceId).int)
-
+        _parent_span_context = utils.get_global_context()
         span = tracer.start_span(name = "parent_placeholder_span", context= _parent_span_context)
         updated_span_context = set_span_in_context(span=span, context= _parent_span_context)
         updated_span_context = set_value("root_span_id", span.get_span_context().span_id, updated_span_context)
-        current_token = attach(updated_span_context)
+        token_data.current_token = attach(updated_span_context)
+        if set_global_context:
+            utils.set_global_context(updated_span_context)
         span.end()
         tracer.id_generator = initial_id_generator
     except:
         logger.warning("Failed to propagate trace id")
     return
 
-
-def propagate_trace_id_from_traceparent():
-    start_trace(use_trace_context = True)
-
 def stop_trace() -> None:
-    global current_token
     try:
-        if current_token is not None:
-            detach(current_token)
-            current_token = None
+        if token_data.current_token is not None:
+            detach(token_data.current_token)
+            token_data.current_token = None
     except:
         logger.warning("Failed to stop propagating trace id")
 

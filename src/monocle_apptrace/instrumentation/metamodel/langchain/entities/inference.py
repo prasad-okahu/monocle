@@ -28,11 +28,11 @@ INFERENCE = {
             {
                 "_comment": "LLM Model",
                 "attribute": "name",
-                "accessor": lambda arguments: _helper.resolve_from_alias(arguments['instance'].__dict__, ['model', 'model_name'])
+                "accessor": lambda arguments: _helper.resolve_from_alias(arguments['instance'].__dict__, ['model', 'model_name', 'endpoint_name', 'deployment_name'])
             },
             {
                 "attribute": "type",
-                "accessor": lambda arguments: 'model.llm.' + _helper.resolve_from_alias(arguments['instance'].__dict__, ['model', 'model_name'])
+                "accessor": lambda arguments: 'model.llm.' + _helper.resolve_from_alias(arguments['instance'].__dict__, ['model', 'model_name', 'endpoint_name', 'deployment_name'])
             }
         ]
     ],

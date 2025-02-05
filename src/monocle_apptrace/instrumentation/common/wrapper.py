@@ -7,6 +7,7 @@ from monocle_apptrace.instrumentation.common.span_handler import SpanHandler
 from monocle_apptrace.instrumentation.common.utils import (
     get_fully_qualified_class_name,
     with_tracer_wrapper,
+    get_global_context
 )
 from monocle_apptrace.instrumentation.metamodel.botocore import _helper
 logger = logging.getLogger(__name__)
@@ -34,7 +35,7 @@ def task_wrapper(tracer: Tracer, handler: SpanHandler, to_wrap, wrapped, instanc
     if to_wrap.get('skip_span'):
         return_value = wrapped(*args, **kwargs)
     else:
-        with tracer.start_as_current_span(name) as span:
+        with tracer.start_as_current_span(name, context=get_global_context()) as span:
             handler.pre_task_processing(to_wrap, wrapped, instance, args, kwargs, span)
             return_value = wrapped(*args, **kwargs)
             handler.hydrate_span(to_wrap, wrapped, instance, args, kwargs, return_value, span)
