@@ -2,6 +2,7 @@ import logging
 from typing import Collection, Dict, List, Union
 import random
 import uuid
+import atexit
 from threading import local
 from opentelemetry import trace
 from opentelemetry.context import attach, get_value, set_value, get_current, detach
@@ -14,7 +15,7 @@ from opentelemetry.sdk.trace import Span, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanProcessor
 from opentelemetry.trace import get_tracer
 from wrapt import wrap_function_wrapper
-from opentelemetry.trace.propagation import set_span_in_context
+from opentelemetry.trace.propagation import set_span_in_context, _SPAN_KEY
 from monocle_apptrace.exporters.monocle_exporters import get_monocle_exporter
 from monocle_apptrace.instrumentation.common.span_handler import SpanHandler
 from monocle_apptrace.instrumentation.common.wrapper_method import (
@@ -147,6 +148,13 @@ def setup_monocle_telemetry(
 
     if start_new_trace:
         start_trace(set_global_context=True)
+        def exit_handler():     
+            try:
+                if token_data.current_token is not None:
+                    stop_trace()
+            except:
+                logger.debug("Failed to clean up trace during exit")
+        atexit.register(exit_handler)
 
     return instrumentor
 
@@ -177,7 +185,7 @@ def start_trace(traceId = "", set_global_context:bool = False):
         token_data.current_token = attach(updated_span_context)
         if set_global_context:
             utils.set_global_context(updated_span_context)
-        span.end()
+#        span.end()
         tracer.id_generator = initial_id_generator
     except:
         logger.warning("Failed to propagate trace id")
@@ -186,11 +194,14 @@ def start_trace(traceId = "", set_global_context:bool = False):
 def stop_trace() -> None:
     try:
         if token_data.current_token is not None:
+            _parent_span_context = get_current()
+            if _parent_span_context is not None and _parent_span_context.get(_SPAN_KEY, None):
+                parent_span: Span = _parent_span_context.get(_SPAN_KEY, None)
+                parent_span.end()
             detach(token_data.current_token)
             token_data.current_token = None
     except:
         logger.warning("Failed to stop propagating trace id")
-
 
 def is_valid_trace_id_uuid(traceId: str) -> bool:
     try:
@@ -200,6 +211,23 @@ def is_valid_trace_id_uuid(traceId: str) -> bool:
         pass
     return False
 
+def monocle_trace_http_route(func):
+    def wrapper(req):
+        trace_id=""
+        if req and hasattr(req, 'headers'):
+            try:
+                traceparent = req.headers.get('HTTP_TRACEPARENT', '')
+                if traceparent and traceparent != "":
+                    traceparent_parts = traceparent.split('-')
+                    version, trace_id, parent_id, flags = traceparent_parts
+                    trace_started = True
+            except:
+                pass
+        start_trace(traceId=trace_id)
+        result = func(req)
+        stop_trace()
+        return result
+    return wrapper
 
 class FixedIdGenerator(id_generator.IdGenerator):
     def __init__(
