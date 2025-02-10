@@ -37,6 +37,7 @@ HAYSTACK_METHODS = [
         "package": "haystack.core.pipeline.pipeline",
         "object": "Pipeline",
         "method": "run",
+        "span_type": "workflow",
         "wrapper_method": task_wrapper
     }
 ]

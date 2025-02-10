@@ -93,6 +93,7 @@ LANGCHAIN_METHODS = [
         "object": "RunnableSequence",
         "method": "invoke",
         "span_name": "langchain.workflow",
+        "span_type": "workflow",
         "wrapper_method": task_wrapper
     },
     {
@@ -100,6 +101,7 @@ LANGCHAIN_METHODS = [
         "object": "RunnableSequence",
         "method": "ainvoke",
         "span_name": "langchain.workflow",
+        "span_type": "workflow",
         "wrapper_method": atask_wrapper
     }
 ]

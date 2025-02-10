@@ -1,5 +1,6 @@
 import logging
 from typing import Callable, Generic, Optional, TypeVar
+from threading import local
 
 from opentelemetry.context import attach, detach, get_current, get_value, set_value
 from opentelemetry.trace import NonRecordingSpan, Span
@@ -11,15 +12,14 @@ U = TypeVar('U')
 logger = logging.getLogger(__name__)
 
 embedding_model_context = {}
-global_context = None
+token_data = local()
+token_data.current_token = None
 
-def set_global_context(context):
-    global global_context
-    global_context = context
+def get_local_token():
+    return token_data.current_token
 
-def get_global_context():
-    global global_context
-    return global_context
+def set_local_token(token):
+    token_data.current_token = token
 
 def set_span_attribute(span, name, value):
     if value is not None:

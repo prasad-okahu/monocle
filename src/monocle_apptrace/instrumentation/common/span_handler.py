@@ -4,6 +4,7 @@ from importlib.metadata import version
 from opentelemetry.context import get_current
 from opentelemetry.context import get_value
 from opentelemetry.sdk.trace import Span
+from opentelemetry.trace.propagation import _SPAN_KEY
 
 from monocle_apptrace.instrumentation.common.constants import (
     QUERY,
@@ -28,12 +29,8 @@ class SpanHandler:
         pass
 
     def pre_task_processing(self, to_wrap, wrapped, instance, args, kwargs, span):
-        if self.__is_root_span(span):
-            try:
-                sdk_version = version("monocle_apptrace")
-                span.set_attribute("monocle_apptrace.version", sdk_version)
-            except Exception as e:
-                logger.warning("Exception finding monocle-apptrace version.")
+        if SpanHandler.__is_root_span(span):
+            SpanHandler.format_root_span(span, to_wrap)
         if "pipeline" in to_wrap['package']:
             set_attribute(QUERY, args[0]['prompt_builder']['question'])
  
@@ -49,9 +46,6 @@ class SpanHandler:
 
     def hydrate_attributes(self, to_wrap, wrapped, instance, args, kwargs, result, span):
         span_index = 0
-        if self.__is_root_span(span):
-            span_index += self.set_workflow_attributes(to_wrap, span, span_index+1)
-            span_index += self.set_app_hosting_identifier_attribute(span, span_index+1)
 
         if 'output_processor' in to_wrap and to_wrap["output_processor"] is not None:    
             output_processor=to_wrap['output_processor']
@@ -107,15 +101,19 @@ class SpanHandler:
                                 logger.error(f"Error evaluating accessor for attribute '{attribute_key}': {e}")
                     span.add_event(name=event_name, attributes=event_attributes)
 
-
-
-    def set_workflow_attributes(self, to_wrap, span: Span, span_index):
+    @staticmethod
+    def __set_workflow_attributes(to_wrap, span: Span, span_index):
         return_value = 1
-        workflow_name = self.get_workflow_name(span=span)
+        workflow_name = SpanHandler.__get_workflow_name(span=span)
         if workflow_name:
             span.set_attribute("span.type", "workflow")
             span.set_attribute(f"entity.{span_index}.name", workflow_name)
             # workflow type
+            SpanHandler.__set_workflow_type(to_wrap, span, span_index)
+        return return_value
+
+    @staticmethod
+    def __set_workflow_type(to_wrap, span: Span, span_index):
         package_name = to_wrap.get('package')
         workflow_type_set = False
         for (package, workflow_type) in WORKFLOW_TYPE_MAP.items():
@@ -124,9 +122,9 @@ class SpanHandler:
                 workflow_type_set = True
         if not workflow_type_set:
             span.set_attribute(f"entity.{span_index}.type", "workflow.generic")
-        return return_value
 
-    def set_app_hosting_identifier_attribute(self, span, span_index):
+    @staticmethod
+    def __set_app_hosting_identifier_attribute(span: Span, span_index: int) -> int:
         return_value = 0
         # Search env to indentify the infra service type, if found check env for service name if possible
         for type_env, type_name in service_type_map.items():
@@ -137,19 +135,45 @@ class SpanHandler:
                 span.set_attribute(f"entity.{span_index}.name", os.environ.get(entity_name_env, "generic"))
         return return_value
 
-    def get_workflow_name(self, span: Span) -> str:
+    @staticmethod
+    def __get_workflow_name(span: Span) -> str:
         try:
             return get_value("workflow_name") or span.resource.attributes.get("service.name")
         except Exception as e:
-            logger.exception(f"Error getting workflow name: {e}")
+            logger.debug(f"Error getting workflow name: {e}")
             return None
 
-    def __is_root_span(self, curr_span: Span) -> bool:
+    @staticmethod
+    def __is_root_span(curr_span: Span) -> bool:
         try:
             if curr_span is not None and hasattr(curr_span, "parent"):
-                return curr_span.parent is None or get_current().get("root_span_id") == curr_span.parent.span_id
+                return curr_span.parent is None # or get_current().get("root_span_id") == curr_span.parent.span_id
         except Exception as e:
-            logger.warning(f"Error finding root span: {e}")
+            logger.debug(f"Error finding root span: {e}")
+
+    @staticmethod
+    def is_uber_workflow_span_running(to_wrap):
+        """ If uber workflow span, started explicitly with new trace is running """
+        if to_wrap.get("span_type", "") == "workflow":
+            _span_context = get_current()
+            if _span_context is not None:
+                _span: Span = _span_context.get(_SPAN_KEY, None)
+                if _span is not None:
+                    span_id = _span.get_span_context().span_id
+                    if get_current().get("root_span_id") == _span.get_span_context().span_id:
+                        SpanHandler.__set_workflow_type(to_wrap, _span, 1)
+                        return True
+        return False
+
+    @staticmethod
+    def format_root_span(span, to_wrap):
+        try:
+            sdk_version = version("monocle_apptrace")
+            span.set_attribute("monocle_apptrace.version", sdk_version)
+        except Exception as e:
+            logger.debug("Exception finding monocle-apptrace version.")
+        SpanHandler.__set_workflow_attributes(to_wrap, span, span_index=1)
+        SpanHandler.__set_app_hosting_identifier_attribute(span, span_index=2)
 
     @staticmethod
     def _get_task_action_processor(to_wrap, process_type):
@@ -163,7 +187,7 @@ class SpanHandler:
                     module = __import__(pre_processor_module, fromlist=[module_path[-1]])
                     processor = getattr(module, pre_processor_function)
             except Exception as e:
-                logger.warn(f"Error getting {process_type}: {e}")
+                logger.debug(f"Error getting {process_type}: {e}")
         return processor
 
     def pre_task_action(self, to_wrap, wrapped, instance, args, kwargs):
@@ -182,4 +206,4 @@ class SpanHandler:
             try:
                 post_processor(tracer, to_wrap, wrapped, instance, args, kwargs, result)
             except Exception as e:
-                logger.warn(f"Error executing pre_processor: {e}")
+                logger.debug(f"Error executing pre_processor: {e}")

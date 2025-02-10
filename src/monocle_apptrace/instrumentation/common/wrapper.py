@@ -2,12 +2,12 @@
 import logging
 
 from opentelemetry.trace import Tracer
+from opentelemetry.context import get_current
 
 from monocle_apptrace.instrumentation.common.span_handler import SpanHandler
 from monocle_apptrace.instrumentation.common.utils import (
     get_fully_qualified_class_name,
-    with_tracer_wrapper,
-    get_global_context
+    with_tracer_wrapper
 )
 from monocle_apptrace.instrumentation.metamodel.botocore import _helper
 logger = logging.getLogger(__name__)
@@ -32,10 +32,10 @@ def task_wrapper(tracer: Tracer, handler: SpanHandler, to_wrap, wrapped, instanc
 
     handler.pre_task_action(to_wrap, wrapped, instance, args, kwargs)
 
-    if to_wrap.get('skip_span'):
+    if to_wrap.get('skip_span') or SpanHandler.is_uber_workflow_span_running(to_wrap):
         return_value = wrapped(*args, **kwargs)
     else:
-        with tracer.start_as_current_span(name, context=get_global_context()) as span:
+        with tracer.start_as_current_span(name) as span:
             handler.pre_task_processing(to_wrap, wrapped, instance, args, kwargs, span)
             return_value = wrapped(*args, **kwargs)
             handler.hydrate_span(to_wrap, wrapped, instance, args, kwargs, return_value, span)
@@ -43,7 +43,6 @@ def task_wrapper(tracer: Tracer, handler: SpanHandler, to_wrap, wrapped, instanc
 
     handler.post_task_action(tracer, to_wrap, wrapped, instance, args, kwargs, return_value)
     return return_value
-
 
 @with_tracer_wrapper
 async def atask_wrapper(tracer: Tracer, handler: SpanHandler, to_wrap, wrapped, instance, args, kwargs):
@@ -62,10 +61,16 @@ async def atask_wrapper(tracer: Tracer, handler: SpanHandler, to_wrap, wrapped, 
 
     handler.validate(to_wrap, wrapped, instance, args, kwargs)
     handler.set_context_properties(to_wrap, wrapped, instance, args, kwargs)
-    with tracer.start_as_current_span(name) as span:
-        handler.pre_task_processing(to_wrap, wrapped, instance, args, span)
-        return_value = wrapped(*args, **kwargs)
-        handler.hydrate_span(to_wrap, wrapped, instance, args, kwargs, return_value, span)
-        handler.post_task_processing(to_wrap, wrapped, instance, args, kwargs, return_value, span)
+    handler.pre_task_action(to_wrap, wrapped, instance, args, kwargs)
 
+    if to_wrap.get('skip_span') or SpanHandler.is_uber_workflow_span_running(to_wrap):
+        return_value = wrapped(*args, **kwargs)
+    else:
+        with tracer.start_as_current_span(name) as span:
+            handler.pre_task_processing(to_wrap, wrapped, instance, args, span)
+            return_value = wrapped(*args, **kwargs)
+            handler.hydrate_span(to_wrap, wrapped, instance, args, kwargs, return_value, span)
+            handler.post_task_processing(to_wrap, wrapped, instance, args, kwargs, return_value, span)
+
+    handler.post_task_action(tracer, to_wrap, wrapped, instance, args, kwargs, return_value)
     return return_value

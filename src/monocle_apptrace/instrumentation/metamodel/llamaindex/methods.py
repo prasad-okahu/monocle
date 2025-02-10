@@ -29,6 +29,7 @@ LLAMAINDEX_METHODS = [
         "object": "BaseQueryEngine",
         "method": "query",
         "span_name": "llamaindex.query",
+        "span_type": "workflow",
         "wrapper_method": task_wrapper
     },
     {
@@ -36,6 +37,7 @@ LLAMAINDEX_METHODS = [
         "object": "BaseQueryEngine",
         "method": "aquery",
         "span_name": "llamaindex.query",
+        "span_type": "workflow",
         "wrapper_method": atask_wrapper
     },
     {

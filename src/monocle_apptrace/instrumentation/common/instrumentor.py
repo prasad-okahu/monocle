@@ -34,9 +34,6 @@ monocle_tracer_provider: TracerProvider = None
 
 MONOCLE_INSTRUMENTOR = "monocle_apptrace"
 
-token_data = local()
-token_data.current_token = None
-
 class MonocleInstrumentor(BaseInstrumentor):
     workflow_name: str = ""
     user_wrapper_methods: list[Union[dict,WrapperMethod]] = []
@@ -147,14 +144,15 @@ def setup_monocle_telemetry(
         instrumentor.instrument(trace_provider=trace_provider)
 
     if start_new_trace:
-        start_trace(set_global_context=True)
-        def exit_handler():     
-            try:
-                if token_data.current_token is not None:
-                    stop_trace()
-            except:
-                logger.debug("Failed to clean up trace during exit")
-        atexit.register(exit_handler)
+        start_trace()
+
+    def exit_handler():     
+        try:
+            if utils.get_local_token() is not None:
+                stop_trace(shutdown=True)
+        except:
+            logger.debug("Failed to clean up trace during exit")
+    atexit.register(exit_handler)
 
     return instrumentor
 
@@ -169,7 +167,7 @@ def on_processor_start(span: Span, parent_context):
 def set_context_properties(properties: dict) -> None:
     attach(set_value(SESSION_PROPERTIES_KEY, properties))
 
-def start_trace(traceId = "", set_global_context:bool = False):
+def start_trace(traceId = ""):
     try:
         stop_trace()
         if traceId.startswith("0x"):
@@ -178,28 +176,28 @@ def start_trace(traceId = "", set_global_context:bool = False):
         initial_id_generator = tracer.id_generator
         if traceId and is_valid_trace_id_uuid(traceId):
             tracer.id_generator = FixedIdGenerator(uuid.UUID(traceId).int)
-        _parent_span_context = utils.get_global_context()
-        span = tracer.start_span(name = "parent_placeholder_span", context= _parent_span_context)
-        updated_span_context = set_span_in_context(span=span, context= _parent_span_context)
+        span = tracer.start_span(name = "workflow")
+        span.set_attribute("span.type", "workflow")
+        SpanHandler.format_root_span(span, to_wrap={})
+        updated_span_context = set_span_in_context(span=span)
         updated_span_context = set_value("root_span_id", span.get_span_context().span_id, updated_span_context)
-        token_data.current_token = attach(updated_span_context)
-        if set_global_context:
-            utils.set_global_context(updated_span_context)
+        utils.set_local_token(attach(updated_span_context))
 #        span.end()
         tracer.id_generator = initial_id_generator
-    except:
-        logger.warning("Failed to propagate trace id")
+    except Exception as e:
+        logger.warning(f"Failed to propagate trace id: {e}")
     return
 
-def stop_trace() -> None:
+def stop_trace(shutdown:bool = False) -> None:
     try:
-        if token_data.current_token is not None:
+        if utils.get_local_token() is not None:
             _parent_span_context = get_current()
-            if _parent_span_context is not None and _parent_span_context.get(_SPAN_KEY, None):
+            if _parent_span_context is not None:
                 parent_span: Span = _parent_span_context.get(_SPAN_KEY, None)
-                parent_span.end()
-            detach(token_data.current_token)
-            token_data.current_token = None
+                if parent_span is not None:
+                    parent_span.end()
+            detach(utils.get_local_token())
+            utils.set_local_token(None)
     except:
         logger.warning("Failed to stop propagating trace id")
 
