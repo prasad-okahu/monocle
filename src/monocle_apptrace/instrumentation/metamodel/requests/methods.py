@@ -7,10 +7,9 @@ REQUESTS_METHODS = [
         "method": "request",
         "span_name": "http_requests",
         "wrapper_method": task_wrapper,
-        "pre_processor": {
+        "pre_task_processor": {
             "module": "monocle_apptrace.instrumentation.metamodel.requests._helper",
             "method": "request_pre_processor"
-        },
-        "skip_span": True
+        }
     }
 ]

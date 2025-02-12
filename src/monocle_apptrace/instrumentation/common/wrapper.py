@@ -2,12 +2,13 @@
 import logging
 
 from opentelemetry.trace import Tracer
-from opentelemetry.context import get_current
 
 from monocle_apptrace.instrumentation.common.span_handler import SpanHandler
 from monocle_apptrace.instrumentation.common.utils import (
     get_fully_qualified_class_name,
-    with_tracer_wrapper
+    with_tracer_wrapper,
+    set_scope,
+    remove_scope
 )
 from monocle_apptrace.instrumentation.metamodel.botocore import _helper
 logger = logging.getLogger(__name__)
@@ -67,10 +68,31 @@ async def atask_wrapper(tracer: Tracer, handler: SpanHandler, to_wrap, wrapped, 
         return_value = wrapped(*args, **kwargs)
     else:
         with tracer.start_as_current_span(name) as span:
-            handler.pre_task_processing(to_wrap, wrapped, instance, args, span)
+            handler.pre_task_processing(to_wrap, wrapped, instance, args, kwargs, span)
             return_value = wrapped(*args, **kwargs)
             handler.hydrate_span(to_wrap, wrapped, instance, args, kwargs, return_value, span)
             handler.post_task_processing(to_wrap, wrapped, instance, args, kwargs, return_value, span)
 
     handler.post_task_action(tracer, to_wrap, wrapped, instance, args, kwargs, return_value)
+    return return_value
+
+@with_tracer_wrapper
+def scope_wrapper(tracer: Tracer, handler: SpanHandler, to_wrap, wrapped, instance, args, kwargs):
+    scope_name = to_wrap.get('scope_name', None)
+    if scope_name:
+        set_scope(scope_name)
+    return_value = wrapped(*args, **kwargs)
+    if scope_name:
+        remove_scope(scope_name)
+    return return_value
+
+
+@with_tracer_wrapper
+async def ascope_wrapper(tracer: Tracer, handler: SpanHandler, to_wrap, wrapped, instance, args, kwargs):
+    scope_name = to_wrap.get('scope_name', None)
+    if scope_name:
+        set_scope(scope_name)
+    return_value = wrapped(*args, **kwargs)
+    if scope_name:
+        remove_scope(scope_name)
     return return_value

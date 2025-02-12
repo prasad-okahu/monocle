@@ -1,6 +1,7 @@
 import os
 from  monocle_apptrace.instrumentation.metamodel.requests import allowed_urls
 from opentelemetry.propagate import inject
+from monocle_apptrace.instrumentation.common.utils import get_baggage_for_scopes
 
 def request_pre_processor(args, kwargs):
     # add traceparent to the request headers in kwargs
@@ -12,7 +13,8 @@ def request_pre_processor(args, kwargs):
                     headers = {}
                 else:
                     headers = kwargs['headers']
-                inject(headers)
+                bagage_context = get_baggage_for_scopes()
+                inject(headers, bagage_context)
                 kwargs['headers'] = headers
                 return
 

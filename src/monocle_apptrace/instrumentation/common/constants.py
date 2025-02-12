@@ -47,3 +47,6 @@ RESPONSE = "response"
 SESSION_PROPERTIES_KEY = "session"
 INFRA_SERVICE_KEY = "infra_service_name"
 META_DATA = 'metadata'
+MONOCLE_SCOPE_NAME_PREFIX = "monocle.scope."
+SCOPE_METHOD_LIST = 'MONOCLE_SCOPE_METHODS'
+SCOPE_METHOD_FILE = 'monocle_scopes.json'

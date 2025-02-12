@@ -5,13 +5,14 @@ from opentelemetry.context import get_current
 from opentelemetry.context import get_value
 from opentelemetry.sdk.trace import Span
 from opentelemetry.trace.propagation import _SPAN_KEY
+from monocle_apptrace.instrumentation.common.utils import get_scopes
 
 from monocle_apptrace.instrumentation.common.constants import (
     QUERY,
     service_name_map,
     service_type_map,
 )
-from monocle_apptrace.instrumentation.common.utils import set_attribute
+from monocle_apptrace.instrumentation.common.utils import set_attribute, get_scopes
 
 logger = logging.getLogger(__name__)
 
@@ -29,11 +30,12 @@ class SpanHandler:
         pass
 
     def pre_task_processing(self, to_wrap, wrapped, instance, args, kwargs, span):
+        SpanHandler.__execute_processor("pre_task_processor", to_wrap, args, kwargs)        
         if SpanHandler.__is_root_span(span):
             SpanHandler.format_root_span(span, to_wrap)
         if "pipeline" in to_wrap['package']:
             set_attribute(QUERY, args[0]['prompt_builder']['question'])
- 
+
     def post_task_processing(self, to_wrap, wrapped, instance, args, kwargs, result, span):
         pass
 
@@ -76,7 +78,8 @@ class SpanHandler:
 
         if span_index > 0:
             span.set_attribute("entity.count", span_index)
-
+        for scope_key, scope_value in get_scopes():
+            span.set_attribute(scope_key, scope_value)
 
     def hydrate_events(self, to_wrap, wrapped, instance, args, kwargs, result, span):
         if 'output_processor' in to_wrap and to_wrap["output_processor"] is not None:
@@ -176,34 +179,31 @@ class SpanHandler:
         SpanHandler.__set_app_hosting_identifier_attribute(span, span_index=2)
 
     @staticmethod
-    def _get_task_action_processor(to_wrap, process_type):
+    def __get_task_action_processor(processor_name, to_wrap):
         processor = None
-        if to_wrap.get(process_type):
+        if to_wrap.get(processor_name):
             try:
-                pre_processor_module = to_wrap[process_type]['module']
-                pre_processor_function = to_wrap[process_type]['method']
+                pre_processor_module = to_wrap[processor_name]['module']
+                pre_processor_function = to_wrap[processor_name]['method']
                 module_path = pre_processor_module.split('.')
                 if len(module_path) > 1:
                     module = __import__(pre_processor_module, fromlist=[module_path[-1]])
                     processor = getattr(module, pre_processor_function)
             except Exception as e:
-                logger.debug(f"Error getting {process_type}: {e}")
+                logger.debug(f"Error getting {processor_name}: {e}")
         return processor
 
-    def pre_task_action(self, to_wrap, wrapped, instance, args, kwargs):
-        pre_processor = SpanHandler._get_task_action_processor(to_wrap, "pre_processor")
-        pre_response = None
-        if pre_processor:
+    @staticmethod
+    def __execute_processor(processor_name, to_wrap, args, kwargs):
+        processor = SpanHandler.__get_task_action_processor(processor_name, to_wrap)
+        if processor:
             try:
-                pre_response = pre_processor(args, kwargs)
+                processor(args, kwargs)
             except Exception as e:
-                logger.warn(f"Error executing pre_processor: {e}")
-        return pre_response
+                logger.debug(f"Error executing {processor_name}: {e}")
+    
+    def pre_task_action(self, to_wrap, wrapped, instance, args, kwargs):
+        SpanHandler.__execute_processor("pre_processor", to_wrap, args, kwargs)
 
     def post_task_action(self, tracer, to_wrap, wrapped, instance, args, kwargs, result):
-        post_processor = SpanHandler._get_task_action_processor(to_wrap, "post_processor")
-        if post_processor:
-            try:
-                post_processor(tracer, to_wrap, wrapped, instance, args, kwargs, result)
-            except Exception as e:
-                logger.debug(f"Error executing pre_processor: {e}")
+        SpanHandler.__execute_processor("post_processor", to_wrap, args, kwargs)

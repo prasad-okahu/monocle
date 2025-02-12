@@ -1,10 +1,14 @@
-import logging
+import logging, json
 from typing import Callable, Generic, Optional, TypeVar
 from threading import local
 
-from opentelemetry.context import attach, detach, get_current, get_value, set_value
+from opentelemetry.context import attach, detach, get_current, get_value, set_value, Context
+from opentelemetry import baggage
 from opentelemetry.trace import NonRecordingSpan, Span
 from opentelemetry.trace.propagation import _SPAN_KEY
+from opentelemetry.sdk.trace import id_generator
+from opentelemetry.propagate import inject, extract
+from monocle_apptrace.instrumentation.common.constants import MONOCLE_SCOPE_NAME_PREFIX, SCOPE_METHOD_FILE
 
 T = TypeVar('T')
 U = TypeVar('U')
@@ -14,6 +18,10 @@ logger = logging.getLogger(__name__)
 embedding_model_context = {}
 token_data = local()
 token_data.current_token = None
+
+scope_id_generator = id_generator.RandomIdGenerator()
+scopes:dict = {} #TODO: Handle multi-thread/multi-context scopes
+http_scopes:list[str] = []
 
 def get_local_token():
     return token_data.current_token
@@ -141,6 +149,72 @@ def get_nested_value(data, keys):
 def get_keys_as_tuple(dictionary, *keys):
     return tuple(next((value for key, value in dictionary.items() if key.endswith(k) and value is not None), None) for k in keys)
 
+#TODO: handle file/io exceptions
+def load_scopes() -> dict:
+    methods_data = []
+    scope_methods = []
+    with open(SCOPE_METHOD_FILE) as f:
+        methods_data = json.load(f)
+        for method in methods_data:
+            if method.get('http_header'):
+                http_scopes.append(method.get('http_header'))
+            else:
+                scope_methods.append(method)
+
+    return scope_methods
+
+def set_scope(scope_name: str, scope_value:str = None) -> None:
+    global scope_id_generator
+    global scopes
+    if scope_value is None:
+        scope_value = f"{hex(scope_id_generator.generate_trace_id())}"
+    scopes[scope_name] = scope_value
+    return
+
+def remove_scope(scope_name: str) -> None:
+    global scopes
+    scopes.pop(scope_name, None)
+    return
+
+def get_scopes() -> dict:
+    global scopes
+    return scopes.items()
+
+def get_baggage_for_scopes():
+    baggage_context:Context = None
+    for scope_key, scope_value in get_scopes():
+        monocle_scope_name = f"{MONOCLE_SCOPE_NAME_PREFIX}{scope_key}"
+        baggage_context = baggage.set_baggage(monocle_scope_name, scope_value, context=baggage_context)
+    return baggage_context
+
+def set_scopes_from_baggage(baggage_context:Context):
+    for scope_key, scope_value in baggage.get_all(baggage_context):
+        if scope_key.startswith(MONOCLE_SCOPE_NAME_PREFIX):
+            scope_name = scope_key[len(MONOCLE_SCOPE_NAME_PREFIX):]
+            set_scope(scope_name, scope_value)
+
+def extract_http_headers(headers) -> str:
+    global http_scopes
+    trace_context:Context = extract(headers)
+    set_scopes_from_baggage(trace_context)
+    #TODO: handle HTTP_TRACEPARENT within extract() with additional mapping
+    try:
+        traceparent = headers['HTTP_TRACEPARENT']
+        traceparent_parts = traceparent.split('-')
+        version, trace_id, parent_id, flags = traceparent_parts
+    except Exception as e:
+        trace_id = ""
+    for http_scope in http_scopes:
+        if http_scope in headers:
+            set_scope(http_scope, headers[http_scope])
+        elif f"HTTP_{http_scope.upper().replace("-","_")}" in headers:
+            set_scope(http_scope, headers[f"HTTP_{http_scope.upper().replace("-","_")}"])
+    return trace_id
+
+def clear_http_scopes():
+    global http_scopes
+    for http_scope in http_scopes:
+        remove_scope(http_scope)
 
 class Option(Generic[T]):
     def __init__(self, value: Optional[T]):

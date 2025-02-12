@@ -4,7 +4,7 @@ import random
 import uuid
 import atexit
 from threading import local
-from opentelemetry import trace
+from opentelemetry import trace, baggage
 from opentelemetry.context import attach, get_value, set_value, get_current, detach
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.instrumentation.utils import unwrap
@@ -13,6 +13,7 @@ from opentelemetry.sdk.trace import TracerProvider, Span, id_generator
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import Span, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanProcessor
+from opentelemetry.propagate import extract
 from opentelemetry.trace import get_tracer
 from wrapt import wrap_function_wrapper
 from opentelemetry.trace.propagation import set_span_in_context, _SPAN_KEY
@@ -20,8 +21,9 @@ from monocle_apptrace.exporters.monocle_exporters import get_monocle_exporter
 from monocle_apptrace.instrumentation.common.span_handler import SpanHandler
 from monocle_apptrace.instrumentation.common.wrapper_method import (
     DEFAULT_METHODS_LIST,
-    WrapperMethod,
+    WrapperMethod
 )
+from monocle_apptrace.instrumentation.common.wrapper import scope_wrapper
 from monocle_apptrace.instrumentation.common import utils
 
 logger = logging.getLogger(__name__)
@@ -70,6 +72,10 @@ class MonocleInstrumentor(BaseInstrumentor):
                 final_method_list.append(method)
             elif isinstance(method, WrapperMethod):
                 final_method_list.append(method.to_dict())
+
+        for method in utils.load_scopes():
+            method['wrapper_method'] = scope_wrapper
+            final_method_list.append(method)
         
         for method_config in final_method_list:
             target_package = method_config.get("package", None)
@@ -201,6 +207,15 @@ def stop_trace(shutdown:bool = False) -> None:
     except:
         logger.warning("Failed to stop propagating trace id")
 
+
+def start_scope(scope_name: str) -> None:
+    utils.set_scope(scope_name)
+    return
+
+def stop_scope(scope_name: str) -> None:
+    utils.remove_scope(scope_name)
+    return
+
 def is_valid_trace_id_uuid(traceId: str) -> bool:
     try:
         uuid.UUID(traceId)
@@ -209,21 +224,23 @@ def is_valid_trace_id_uuid(traceId: str) -> bool:
         pass
     return False
 
+def monocle_trace_scope(func):
+    def wrapper(scope_name=func.__name__):
+        start_scope(scope_name)
+        result = func(scope_name)
+        stop_scope(scope_name)
+        return result
+    return wrapper
+
 def monocle_trace_http_route(func):
     def wrapper(req):
         trace_id=""
         if req and hasattr(req, 'headers'):
-            try:
-                traceparent = req.headers.get('HTTP_TRACEPARENT', '')
-                if traceparent and traceparent != "":
-                    traceparent_parts = traceparent.split('-')
-                    version, trace_id, parent_id, flags = traceparent_parts
-                    trace_started = True
-            except:
-                pass
+            trace_id = utils.get_trace_id_from_headers(req.headers)
         start_trace(traceId=trace_id)
         result = func(req)
         stop_trace()
+        utils.clear_http_scopes()
         return result
     return wrapper
 
