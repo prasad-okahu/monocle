@@ -206,4 +206,4 @@ class SpanHandler:
         SpanHandler.__execute_processor("pre_processor", to_wrap, args, kwargs)
 
     def post_task_action(self, tracer, to_wrap, wrapped, instance, args, kwargs, result):
-        SpanHandler.__execute_processor("post_processor", to_wrap, args, kwargs)
+        SpanHandler.__execute_processor("post_processor", to_wrap, args, kwargs, result)
