@@ -1,5 +1,16 @@
+import os
+from datetime import datetime
 import pytest
 from .fluent_api import TraceAssertion
+
+@pytest.fixture(scope="session", autouse=True)
+def run_once_at_start_of_session():
+    """
+    This fixture runs once at the start of the pytest session.
+    Place any setup code here that should execute only once before any tests run.
+    """
+    os.environ["LOCAL_RUN_ID"] = datetime.now().isoformat()
+    yield
 
 @pytest.fixture()
 def monocle_trace_asserter(request:pytest.FixtureRequest):
