@@ -2,96 +2,42 @@
 """
 Claude CLI Event Handler
 
-Hook entry point for all Claude CLI events. Responsibilities:
-  - Read the event JSON from stdin
-  - Append every event with a UTC timestamp to a per-session JSONL log file
-  - On Stop, delegate to replay.replay_session to reproduce the interaction
-
-Events handled:
-  SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop, SessionEnd
+Hook entry point for all Claude Code CLI events.
+  - Reads event JSON from stdin
+  - Appends every event with a UTC timestamp to the per-session JSONL log
+  - On Stop: triggers replay to emit Monocle spans for the completed turn
 """
 
 import json
 import sys
-import os
 from datetime import datetime, timezone
-from pathlib import Path
 
-from monocle_apptrace.instrumentation.metamodel.claude_cli.trace_events import delete_trace_file, record_trace_event, _session_log, _log
-from monocle_apptrace.instrumentation.metamodel.claude_cli.replay import replay_session
+from monocle_apptrace.instrumentation.metamodel.claude_cli.trace_events import (
+    _log,
+    _session_log,
+    record_trace_event,
+    mark_subagent_session,
+    is_subagent_session,
+)
+from monocle_apptrace.instrumentation.metamodel.claude_cli.replay import replay_session, replay_compaction
 
-# ── Storage (write side) ──────────────────────────────────────────────────────
-
-
-
-def _read_last_assistant_message(transcript_path: str) -> str:
-    """
-    Extract the last assistant message text from the transcript JSONL file.
-    The transcript uses the Anthropic Messages API format — each line is a
-    message dict with 'role' and 'content' fields.
-    """
-    try:
-        path = Path(transcript_path)
-        if not path.exists():
-            return ""
-        last_text = ""
-        for line in path.read_text().splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                msg = json.loads(line)
-                # Handle both flat {"role": "assistant", "content": ...}
-                # and wrapped {"type": "assistant", "message": {...}} formats
-                if msg.get("type") == "assistant":
-                    msg = msg.get("message", msg)
-                if msg.get("role") != "assistant":
-                    continue
-                content = msg.get("content", "")
-                if isinstance(content, str):
-                    last_text = content
-                elif isinstance(content, list):
-                    texts = [
-                        block.get("text", "")
-                        for block in content
-                        if isinstance(block, dict) and block.get("type") == "text"
-                    ]
-                    last_text = "\n".join(t for t in texts if t)
-            except json.JSONDecodeError:
-                pass
-        return last_text
-    except Exception:
-        return ""
+# Events that trigger span emission for the completed turn
+_REPLAY_TRIGGERS = {"Stop", "StopFailure"}
+_COMPACTION_TRIGGERS = {"PostCompact"}
 
 
 def record_event(event_data: dict) -> None:
-    """
-    Append the event dict plus a UTC timestamp to the session log.
-    For Stop events, also extracts and stores the last assistant response
-    from the transcript so the replay has access to the actual output.
-    """
     session_id = event_data.get("session_id", "unknown")
     entry = {"timestamp": datetime.now(timezone.utc).isoformat(), **event_data}
-
-    if event_data.get("hook_event_name") == "Stop":
-        transcript_path = event_data.get("transcript_path", "")
-        entry["assistant_response"] = _read_last_assistant_message(transcript_path)
-
     with _session_log(session_id).open("a") as fh:
         fh.write(json.dumps(entry) + "\n")
-
     record_trace_event(entry)
-    delete_trace_file()
-
-# ── Entry point ───────────────────────────────────────────────────────────────
 
 
 def main() -> None:
-### UNCOMMENT    raw = sys.stdin.read()
-    raw = [line.rstrip("\n") for line in sys.stdin.readlines()]
-
+    raw = sys.stdin.read()
     try:
-        event_data = json.loads("".join(raw))
+        event_data = json.loads(raw)
     except json.JSONDecodeError as exc:
         _log(f"ERROR: could not parse stdin as JSON – {exc}")
         sys.exit(1)
@@ -101,7 +47,21 @@ def main() -> None:
 
     record_event(event_data)
     _log(f"Recorded {event_name} for session {session_id}")
-    replay_session(session_id)
+
+    # Track subagent sessions so we don't emit duplicate top-level turns for them
+    if event_name == "SubagentStart":
+        agent_id = event_data.get("agent_id", "")
+        if agent_id:
+            mark_subagent_session(agent_id)
+
+    if event_name in _REPLAY_TRIGGERS:
+        if is_subagent_session(session_id):
+            _log(f"Skipping replay for subagent session {session_id} (captured in parent turn)")
+        else:
+            replay_session(session_id)
+
+    if event_name in _COMPACTION_TRIGGERS:
+        replay_compaction(session_id)
 
 
 if __name__ == "__main__":

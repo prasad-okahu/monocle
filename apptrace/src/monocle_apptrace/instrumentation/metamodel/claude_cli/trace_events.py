@@ -6,11 +6,6 @@ Writes every hook event to a single append-only trace file at the project root:
 
 All sessions share the same file, so the full history of events across
 sessions is available in one place.
-
-Public API
-----------
-record_trace_event(entry)  – append an already-enriched event dict as a JSON line
-delete_trace_file()        – remove the trace file if it exists
 """
 
 import json
@@ -33,13 +28,30 @@ def record_trace_event(entry: dict) -> None:
         fh.write(json.dumps(entry) + "\n")
 
 
-def delete_trace_file() -> None:
-    """Delete the trace file if it exists."""
-    if TRACE_FILE.exists():
-        TRACE_FILE.unlink()
-        _log(f"Deleted trace file: {TRACE_FILE}")
-    else:
-        _log(f"Trace file not found, nothing to delete: {TRACE_FILE}")
+def _subagent_sessions_file() -> Path:
+    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    return SESSIONS_DIR / ".subagent_sessions.json"
+
+
+def mark_subagent_session(agent_id: str) -> None:
+    """Record that agent_id is a subagent session so we skip emitting a top-level turn for it."""
+    f = _subagent_sessions_file()
+    try:
+        known = json.loads(f.read_text()) if f.exists() else []
+    except Exception:
+        known = []
+    if agent_id not in known:
+        known.append(agent_id)
+        f.write_text(json.dumps(known))
+
+
+def is_subagent_session(session_id: str) -> bool:
+    """Return True if session_id was spawned as a subagent by some parent session."""
+    f = _subagent_sessions_file()
+    try:
+        return session_id in (json.loads(f.read_text()) if f.exists() else [])
+    except Exception:
+        return False
 
 
 def _log(msg: str) -> None:

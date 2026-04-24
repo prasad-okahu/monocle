@@ -29,7 +29,8 @@ class ClaudeSpanHandler(SpanHandler):
             token_context = set_value(AGENT_SESSION, kwargs.get(AGENT_SESSION), token_context)
             return set_scope(AGENT_SESSION, kwargs.get(AGENT_SESSION), token_context)
         else:
-            return attach(token_context)
+            # attach(None) corrupts the OTel context — fall back to current context
+            return attach(token_context if token_context is not None else get_current())
 
     def pre_tracing(self, to_wrap, wrapped, instance, args, kwargs):
         return self._set_span_times(kwargs), None

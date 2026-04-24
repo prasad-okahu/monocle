@@ -1,27 +1,69 @@
-from monocle_apptrace.instrumentation.common.wrapper import task_wrapper, atask_wrapper
-from monocle_apptrace.instrumentation.metamodel.claude_cli.entities.agent import REQUEST
-from monocle_apptrace.instrumentation.metamodel.claude_cli.entities.tool import TOOL
-from monocle_apptrace.instrumentation.metamodel.agents.agents_processor import (
-    constructor_wrapper,
-    handoff_constructor_wrapper,
+from monocle_apptrace.instrumentation.common.wrapper import task_wrapper
+from monocle_apptrace.instrumentation.metamodel.claude_cli.entities.agent import (
+    INVOCATION,
+    REQUEST,
+    SUBAGENT_INVOCATION,
 )
+from monocle_apptrace.instrumentation.metamodel.claude_cli.entities.inference import INFERENCE
+from monocle_apptrace.instrumentation.metamodel.claude_cli.entities.tool import MCP_TOOL, TOOL
+
+_PKG = "monocle_apptrace.instrumentation.metamodel.claude_cli.replay_handlers"
+_OBJ = "ReplayHandler"
+_HANDLER = "claude_handler"
 
 CLAUDE_CLI_PROXY_METHODS = [
-    # Main agent runner methods
     {
-        "package": "monocle_apptrace.instrumentation.metamodel.claude_cli.replay_handlers",
-        "object": "ReplayHandler",
+        "package": _PKG,
+        "object": _OBJ,
         "method": "handle_turn",
+        "span_name": "Claude Code",
         "wrapper_method": task_wrapper,
         "output_processor": REQUEST,
-        "span_handler": "claude_handler"
+        "span_handler": _HANDLER,
     },
     {
-        "package": "monocle_apptrace.instrumentation.metamodel.claude_cli.replay_handlers",
-        "object": "ReplayHandler",
+        "package": _PKG,
+        "object": _OBJ,
+        "method": "handle_invocation",
+        "span_name": "Claude Invocation",
+        "wrapper_method": task_wrapper,
+        "output_processor": INVOCATION,
+        "span_handler": _HANDLER,
+    },
+    {
+        "package": _PKG,
+        "object": _OBJ,
+        "method": "handle_inference_round",
+        "span_name": "Claude Inference",
+        "wrapper_method": task_wrapper,
+        "output_processor": INFERENCE,
+        "span_handler": _HANDLER,
+    },
+    {
+        "package": _PKG,
+        "object": _OBJ,
         "method": "handle_tool_call",
+        "span_name": "Tool",
         "wrapper_method": task_wrapper,
         "output_processor": TOOL,
-        "span_handler": "claude_handler"
+        "span_handler": _HANDLER,
+    },
+    {
+        "package": _PKG,
+        "object": _OBJ,
+        "method": "handle_mcp_call",
+        "span_name": "MCP Tool",
+        "wrapper_method": task_wrapper,
+        "output_processor": MCP_TOOL,
+        "span_handler": _HANDLER,
+    },
+    {
+        "package": _PKG,
+        "object": _OBJ,
+        "method": "handle_subagent",
+        "span_name": "Sub-Agent",
+        "wrapper_method": task_wrapper,
+        "output_processor": SUBAGENT_INVOCATION,
+        "span_handler": _HANDLER,
     },
 ]
