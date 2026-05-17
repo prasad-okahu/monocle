@@ -118,9 +118,20 @@ def extract_messages(kwargs):
                     try:
                         tool_call_messages = []
                         for tool_call in msg['tool_calls']:
+                            tool_function_name = ""
+                            tool_arguments = ""
+                            if hasattr(tool_call, 'function') and hasattr(tool_call.function, 'name'):
+                                tool_function_name = tool_call.function.name
+                            if hasattr(tool_call, 'function') and hasattr(tool_call.function, 'arguments'):
+                                tool_arguments = tool_call.function.arguments
+                            if 'function' in tool_call:
+                                if 'name' in tool_call['function']:
+                                    tool_function_name = tool_call['function']['name']
+                                if 'arguments' in tool_call['function']:
+                                    tool_arguments = tool_call['function']['arguments']
                             tool_call_messages.append(get_json_dumps({
-                                "tool_function": tool_call.function.name,
-                                "tool_arguments": tool_call.function.arguments,
+                                "tool_function": tool_function_name,
+                                "tool_arguments": tool_arguments,
                             }))
                         messages.append({msg['role']: tool_call_messages})
                     except Exception as e:

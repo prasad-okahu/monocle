@@ -67,6 +67,8 @@ def extract_agent_input(arguments):
         for message in history:
             if hasattr(message, 'content') and hasattr(message, 'type') and message.type == "human":  # Check if the message is a HumanMessage
                 messages.append(message.content)
+            elif isinstance(message, dict) and message.get('role') == "user" and 'content' in message:  # Check if it's a dict with role and content
+                messages.append(message['content'])
         return messages
     return []
 
