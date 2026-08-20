@@ -1,29 +1,108 @@
 from pathlib import Path
-from typing import Any, Optional, Sequence, Tuple, Union
-from pydantic import BaseModel, Field
+from typing import TYPE_CHECKING, Any, Optional, Sequence, Tuple, Union
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 from opentelemetry.sdk.trace import ReadableSpan
 from monocle_test_tools.schema import FactID, SpanType
 from monocle_test_tools.trace_utils import get_input_from_span, get_output_from_span
+
+if TYPE_CHECKING:
+    from monocle_test_tools.fluent_api import TraceAssertion
 
 # Turn spans are tagged "agentic.turn"; traces recorded by older Monocle
 # versions tag the same span "agentic.request".
 TURN_SPAN_TYPES = (SpanType.AGENTIC_REQUEST.value, "agentic.request")
 INFERENCE_SPAN_TYPES = (SpanType.INFERENCE.value, "inference.framework")
 
-class Agent(BaseModel):
+def _keyed_entry(model: type[BaseModel], data: Any) -> Optional[Tuple[str, Any]]:
+    """Split a ``{"<name>": <body>}`` mapping, or return None when data isn't one.
+
+    A mapping that carries any of the model's own field names is the flat form
+    (``{"name": ..., ...}``) and is left alone.
+    """
+    if not isinstance(data, dict) or not data or set(data) & set(model.model_fields):
+        return None
+    kind = model.__name__.lower()
+    if len(data) > 1:
+        raise ValueError(
+            f'a {kind} must be a single "<name>": ... entry, got {sorted(data)}')
+    return next(iter(data.items()))
+
+class KeyedByName(BaseModel):
+    """Base for models written in JSON as ``{"<name>": {<the other fields>}}``.
+
+    The name is the JSON key, so a list of them reads as a list of named entries.
+    The flat form (``{"name": ..., "input": ...}``) and a bare name string are
+    also accepted on input; both serialize back out in the keyed form. Fields
+    left unset are left out of the body, so a name-only entry is ``{"<name>": {}}``.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(None, description="name")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_keyed_form(cls, data: Any) -> Any:
+        """Turn ``{"<name>": {...}}`` (or a bare name) into the model's own fields."""
+        if isinstance(data, str):
+            return {"name": data}
+        entry = _keyed_entry(cls, data)
+        if entry is None:
+            return data
+        name, body = entry
+        if body is not None and not isinstance(body, dict):
+            raise ValueError(f'{cls.__name__.lower()} "{name}" must map to an object, '
+                             f'got {type(body).__name__}')
+        return {"name": name, **(body or {})}
+
+    @model_serializer(mode="wrap")
+    def _to_keyed_form(self, handler) -> dict:
+        body = handler(self)
+        name = body.pop("name", None)
+        return {name: {key: value for key, value in body.items() if value is not None}}
+
+class Agent(KeyedByName):
+    """An agent to validate, written as ``{"<name>": {"input": ..., "output": ...}}``."""
     name: str = Field(None, description="agent name")
     input: Optional[str] = Field(None, description="agent input")
     output: Optional[str] = Field(None, description="agent output")
 
-class Tool(BaseModel):
+class Tool(KeyedByName):
+    """A tool to validate, written as ``{"<name>": {"input": ..., "output": ..., "agent": ...}}``."""
     name: str = Field(None, description="tool name")
     input: Optional[str] = Field(None, description="tool input")
     output: Optional[str] = Field(None, description="tool output")
     agent: Optional[Agent] = Field(None, description="tool calling agent")
 
 class Eval(BaseModel):
+    """An eval to run, written as ``{"<name>": "<result>"}``.
+
+    The eval name is the key and its expected result is the value, so the body is
+    a single level. The flat form (``{"name": ..., "result": ...}``) and a bare
+    name string are also accepted on input.
+    """
+    model_config = ConfigDict(extra="forbid")
+
     name: Union[str, Path] = Field(None, description= " Eval name")
     result: str = Field(None, description="Eval result")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_keyed_form(cls, data: Any) -> Any:
+        """Turn ``{"<name>": <result>}`` (or a bare name) into the model's own fields."""
+        if isinstance(data, (str, Path)):
+            return {"name": data}
+        entry = _keyed_entry(cls, data)
+        if entry is None:
+            return data
+        name, result = entry
+        if isinstance(result, dict):
+            raise ValueError(f'eval "{name}" must map to a result value, not an object')
+        return {"name": name, "result": result}
+
+    @model_serializer(mode="wrap")
+    def _to_keyed_form(self, handler) -> dict:
+        body = handler(self)
+        return {body.get("name"): body.get("result")}
 
 class FluentTestCase(BaseModel):
     name: Optional[str] = Field("monocle_test", description="Name of the test case.")
@@ -32,6 +111,34 @@ class FluentTestCase(BaseModel):
     tools: Optional[list[Tool]] = Field([], description="tools to validate")
     evals: Optional[list[Eval]] = Field([], description="evals to run")
     token_limit: Optional[int] = Field(None, description="Token limit")
+
+    def validate_tools(self, asserter: "TraceAssertion") -> "FluentTestCase":
+        """Assert on the given trace asserter that every tool of this test case was called.
+
+        A tool's input and output are only checked when the test case sets them, so a
+        name-only tool asserts nothing beyond the call having happened. The calling
+        agent, when set, narrows the assertion to calls made by that agent.
+
+        Every tool starts from ``asserter`` itself: ``called_tool`` returns a new
+        asserter narrowed to the spans it matched, so carrying that one over to the
+        next tool would look for it inside the previous tool's spans. Failures are
+        collected on the asserter (they do not raise here) the way they are for a
+        hand-written fluent chain.
+
+        Args:
+            asserter: The trace asserter holding the spans to assert on.
+
+        Returns:
+            This test case, so validations can be chained.
+        """
+        for tool in self.tools or []:
+            scope = asserter.called_tool(
+                tool.name, agent_name=tool.agent.name if tool.agent else None)
+            if tool.input is not None:
+                scope = scope.has_input(tool.input)
+            if tool.output is not None:
+                scope.has_output(tool.output)
+        return self
 
     @classmethod
     def from_spans(cls, spans: Sequence[ReadableSpan], name: Optional[str] = None,
@@ -85,7 +192,7 @@ class FluentTestCase(BaseModel):
             input=input if input is not None else (tuple(turn_inputs) or None),
             agents=agents,
             tools=tools,
-            evals=[ev if isinstance(ev, Eval) else Eval(**ev) for ev in evals or []],
+            evals=[ev if isinstance(ev, Eval) else Eval.model_validate(ev) for ev in evals or []],
             token_limit=_total_tokens(ordered_spans) or None,
         )
 
@@ -143,18 +250,21 @@ def _dedupe(items: list[Any]) -> list[Any]:
 test_example1 = {
     "input": "Book a flight from SFO to LAX for tomorrow",
     "agents": [
-        {"name": "supervisor"},
-        {"name": "adk_book_hotel"}
+        {"supervisor": {}},
+        {"adk_book_hotel": {"output": "Hotel booked"}}
+    ],
+    "tools": [
+        {"book_flight": {"output": "confirmed", "agent": {"adk_book_flight": {}}}}
     ],
 }
 
 test_example2 = {
     "input": {"fact_id": "12345"},
     "agents": [
-        {"name": "adk_book_fligh"}
+        {"adk_book_fligh": {}}
     ],
     "evals": [
-        {"name": "hallucinations", "result": "major_hallucination"}
+        {"hallucinations": "major_hallucination"}
     ],
 }
 

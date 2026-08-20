@@ -48,7 +48,7 @@ class Evaluation(BaseModel):
 class FactID(BaseModel):
     fact_id: str = Field("", description="fact ID")
     fact_name: str = Field("traces", description= "fact name")
-    trace_source: str = Field("file", description= "trace source")
+    source: str = Field("file", description= "trace source")
 
 class TestSpan(BaseModel):
     """
