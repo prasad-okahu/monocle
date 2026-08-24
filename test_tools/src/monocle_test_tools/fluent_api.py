@@ -42,9 +42,30 @@ def collect_assertions(func):
         for signature in asserter.fluent_chain:
             fluent_chain.append(signature)
         fluent_chain.append(func_signature)
+
+        # Chain-mixing guard. A chain either drives its assertions from a test
+        # case or spells them out, never both -- a half-driven chain reads as if
+        # the test case were being validated when most of it is being ignored.
+        # The mode is set by the first decorated call and carried forward; it
+        # lives on the derived asserter, so an independent chain starting from
+        # the same fixture asserter is unaffected.
+        testcase_given = kwargs.get("testcase") is not None
+        if asserter.fluent_chain and asserter._testcase_mode is not None:
+            if asserter._testcase_mode and not testcase_given:
+                raise ValueError(
+                    f"this chain is driven by a testcase; pass testcase= to "
+                    f"{func.__name__}() as well, or start a new chain")
+            if not asserter._testcase_mode and testcase_given:
+                raise ValueError(
+                    f"this chain does not use a testcase; drop testcase= from "
+                    f"{func.__name__}(), or start a new chain")
+        testcase_mode = (asserter._testcase_mode if asserter.fluent_chain
+                         else testcase_given)
+
         asserter = TraceAssertion(filtered_spans=asserter._filtered_spans, fluent_chain=fluent_chain,
                             is_assertion_failed=asserter.is_assertion_failed, _eval=asserter._eval,
-                            okahu_filter=getattr(asserter, "_okahu_filter", None))
+                            okahu_filter=getattr(asserter, "_okahu_filter", None),
+                            testcase_mode=testcase_mode)
         try:
             func(asserter, *args, **kwargs)
         except AssertionError as e:
@@ -87,7 +108,8 @@ class TraceAssertion():
 
     def __init__(self, filtered_spans:Optional[list[Span]] = None, fluent_chain:list[str] = []
                 ,is_assertion_failed:bool = False, _eval:Optional[Union[str, BaseEval]] = None,
-                okahu_filter:Optional[dict] = None) -> None:
+                okahu_filter:Optional[dict] = None,
+                testcase_mode:Optional[bool] = None) -> None:
         self._eval:Union[str, BaseEval]  = _eval
         self.validator = MonocleValidator()
         if filtered_spans is None:
@@ -99,6 +121,8 @@ class TraceAssertion():
         self._skip_export = False
         self.mock_tools: Optional[list[MockTool]] = []
         self._okahu_filter = okahu_filter
+        # None until the chain's first decorated call decides. See collect_assertions.
+        self._testcase_mode = testcase_mode
         
     def record_assertion(self, e:AssertionError, fluent_chain:list[str]) -> None:
         """Record an assertion error with its fluent chain context."""
@@ -892,7 +916,7 @@ class TraceAssertion():
         return None, eval_name
 
     @collect_assertions
-    def check_eval(self, eval_name:Optional[Union[str, Path]] = None, expected:Optional[Union[str, list[str]]] = None, not_expected:Optional[Union[str, list[str]]] = None, fact_name:Optional[str] = "traces", message:Optional[str] = None, template_path:Optional[Union[str, Path]] = None, *, template:Optional[dict] = None, min_facts:int = 1, fail_threshold:int = 0, max_facts:Optional[int] = None) -> 'TraceAssertion':
+    def check_eval(self, eval_name:Optional[Union[str, Path]] = None, expected:Optional[Union[str, list[str]]] = None, not_expected:Optional[Union[str, list[str]]] = None, fact_name:Optional[str] = "traces", message:Optional[str] = None, template_path:Optional[Union[str, Path]] = None, *, template:Optional[dict] = None, min_facts:int = 1, fail_threshold:int = 0, max_facts:Optional[int] = None, testcase:Optional[Union[FluentTestCase, dict]] = None) -> 'TraceAssertion':
         """Validate evaluation results for the current filtered spans.
 
         Provide exactly one of:
@@ -910,10 +934,27 @@ class TraceAssertion():
         When with_trace_source("okahu", start_time=..., end_time=...) has recorded a
         filter scope, this runs the filtered (async job) flow instead of the span
         path; min_facts/fail_threshold/max_facts apply only in that mode.
+
+        Args:
+            testcase: A FluentTestCase (or a dict in any shape it accepts) whose
+                evals to run. Each eval's name selects the template -- a str is an
+                Okahu template name, a Path is a custom-template file -- and its
+                result is the expected label. Cannot be combined with eval_name,
+                expected, not_expected, template_path or template.
         """
         eval_name, template_path = self._apply_eval_type(eval_name, template_path, template)
 
         filter_scope = getattr(self, "_okahu_filter", None)
+        if testcase is not None:
+            if filter_scope is not None:
+                raise ValueError(
+                    "testcase= is not supported with a time-window (filtered) source: "
+                    "a time window identifies no single fact for the test case to name.")
+            return self._check_eval_testcase(
+                testcase, eval_name=eval_name, expected=expected,
+                not_expected=not_expected, template_path=template_path,
+                template=template, fact_name=fact_name, message=message)
+
         if filter_scope is None:
             # Span mode: filter-only params must not be used.
             if min_facts != 1 or fail_threshold != 0 or max_facts is not None:
@@ -934,6 +975,33 @@ class TraceAssertion():
         TraceAssertion._eval_report = build_filtered_report(
             expected, not_expected, fact_records, job_id=None)
         self._raise_eval_failures(eval_name, failures, len(fact_records), message)
+        return self
+
+    def _check_eval_testcase(self, testcase, *, eval_name, expected, not_expected,
+                             template_path, template, fact_name, message) -> 'TraceAssertion':
+        """Run every eval a test case names, reporting all their failures at once."""
+        testcase = resolve_testcase(testcase, eval_name=eval_name, expected=expected,
+                                    not_expected=not_expected,
+                                    template_path=template_path, template=template)
+        if not testcase.evals:
+            raise ValueError(
+                f"testcase '{testcase.name}' has no evals to check; a test case with "
+                "nothing to assert must not read as a passing test")
+
+        failures, fact_records = [], []
+        for entry in testcase.evals:
+            is_template = isinstance(entry.name, Path)
+            entry_failures, entry_facts = self._check_eval_one(
+                eval_name=None if is_template else entry.name,
+                expected=entry.result, not_expected=None, fact_name=fact_name,
+                template_path=str(entry.name) if is_template else None,
+                template=None)
+            failures.extend(entry_failures)
+            fact_records.extend(entry_facts)
+
+        TraceAssertion._eval_report = build_filtered_report(
+            [entry.result for entry in testcase.evals], None, fact_records, job_id=None)
+        self._raise_eval_failures(testcase.name, failures, len(fact_records), message)
         return self
 
     @staticmethod
