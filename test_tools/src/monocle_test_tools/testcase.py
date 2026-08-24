@@ -104,13 +104,75 @@ class Eval(BaseModel):
         body = handler(self)
         return {body.get("name"): body.get("result")}
 
+def _as_keyed_list(model: type[BaseModel], value: Any) -> Any:
+    """Normalize the mapping form of a keyed-entry list field into a list.
+
+    ``{"a": {...}, "b": {...}}`` becomes ``[{"a": {...}}, {"b": {...}}]`` so each
+    item is a single keyed entry the item model already knows how to parse. A dict
+    carrying the item model's own field names is instead a single flat entry and is
+    just wrapped. Anything that is not a dict is left alone.
+
+    ``_keyed_entry`` applies the same "carries field names" test but cannot be
+    reused here: it raises on a dict with more than one key, which is exactly the
+    mapping case.
+    """
+    if not isinstance(value, dict):
+        return value
+    if set(value) & set(model.model_fields):
+        return [value]
+    return [{name: body} for name, body in value.items()]
+
 class FluentTestCase(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: Optional[str] = Field("monocle_test", description="Name of the test case.")
     input: Optional[Union[Tuple[Any, ...], FactID]] = Field(None, description="Input prompt or data for the test case or fact_id/fact_name.")
     agents: Optional[list[Agent]] = Field([], description="agents to validate")
     tools: Optional[list[Tool]] = Field([], description="tools to validate")
     evals: Optional[list[Eval]] = Field([], description="evals to run")
     token_limit: Optional[int] = Field(None, description="Token limit")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_input_shapes(cls, data: Any) -> Any:
+        """Accept the shapes parametrized tests are actually written in.
+
+        Three normalizations, all input-only - serialization still emits the flat
+        form, so a dump round-trips back through here unchanged:
+
+        1. ``{"expected": {...}}`` has its contents lifted to the top level, so a
+           test case can group its expectations without the model growing a nesting
+           level it does not otherwise need.
+        2. ``agents``/``tools``/``evals`` written as a mapping of name to body
+           become the list of keyed entries the fields are declared as.
+        3. A scalar ``input`` becomes a one-tuple, so ``"Book a flight"`` works
+           where ``("Book a flight",)`` was required.
+        """
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+
+        expected = data.pop("expected", None)
+        if isinstance(expected, dict):
+            collisions = sorted(set(expected) & set(data))
+            if collisions:
+                raise ValueError(
+                    f"{collisions} given both inside and outside 'expected'; "
+                    "put each key in one place only")
+            data.update(expected)
+        elif expected is not None:
+            raise ValueError(
+                f"'expected' must be an object, got {type(expected).__name__}")
+
+        for field, model in (("agents", Agent), ("tools", Tool), ("evals", Eval)):
+            if field in data:
+                data[field] = _as_keyed_list(model, data[field])
+
+        value = data.get("input")
+        if value is not None and not isinstance(value, (tuple, list, dict, FactID)):
+            data["input"] = (value,)
+
+        return data
 
     def validate_tools(self, asserter: "TraceAssertion") -> "FluentTestCase":
         """Assert on the given trace asserter that every tool of this test case was called.
