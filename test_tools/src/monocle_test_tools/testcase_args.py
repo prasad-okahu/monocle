@@ -4,9 +4,13 @@ These are pure functions over a ``FluentTestCase`` with no ``TraceAssertion``
 dependency, so they stay testable on their own and are reusable by the span
 selectors when those gain ``testcase=`` support.
 """
-from typing import Any, Union
+from typing import Any, Sequence, Union
 
-from monocle_test_tools.testcase import FluentTestCase
+from opentelemetry.sdk.trace import ReadableSpan
+
+from monocle_test_tools.schema import FactID, SpanType
+from monocle_test_tools.testcase import TURN_SPAN_TYPES, FluentTestCase
+from monocle_test_tools.trace_utils import get_input_from_span
 
 
 def resolve_testcase(testcase: Union[FluentTestCase, dict], **forbidden: Any) -> FluentTestCase:
@@ -44,3 +48,77 @@ def resolve_testcase(testcase: Union[FluentTestCase, dict], **forbidden: Any) ->
         return FluentTestCase.model_validate(testcase)
     raise TypeError(
         f"testcase must be a FluentTestCase or dict, got {type(testcase).__name__}")
+
+
+# FactID.fact_name values import_traces understands as-is. Its own default,
+# "traces", is Okahu's name for the same thing import_traces calls "trace".
+_PASSTHROUGH_FACT_NAMES = ("trace", "session")
+
+
+def factid_import_kwargs(fact_id: FactID) -> dict:
+    """Translate a FactID into MonocleValidator.import_traces keyword arguments.
+
+    Any fact name that is not one import_traces recognizes is taken to be a
+    custom scope name, matching how import_traces already treats the scope
+    branch (it assigns the caller's scope_name straight to okahu_fact_name).
+
+    ``workflow_name`` and ``load_spans`` are not derived here -- neither is a
+    property of the fact, and the two call sites source them differently.
+
+    Args:
+        fact_id: The test case's FactID input.
+
+    Returns:
+        Keyword arguments for import_traces.
+
+    Raises:
+        ValueError: If the FactID carries no fact_id.
+    """
+    if not fact_id.fact_id:
+        raise ValueError("fact_id is required to load a test case's trace")
+
+    kwargs = {"trace_source": fact_id.source, "id": fact_id.fact_id}
+    name = fact_id.fact_name
+    if name in _PASSTHROUGH_FACT_NAMES:
+        kwargs["fact_name"] = name
+    elif name == "traces":
+        kwargs["fact_name"] = "trace"
+    else:
+        kwargs["fact_name"] = "scope"
+        kwargs["scope_name"] = name
+    return kwargs
+
+
+def turn_inputs_from_spans(spans: Sequence[ReadableSpan]) -> tuple:
+    """The inputs a recorded run was driven with, in call order.
+
+    Reads the turn spans, falling back to the first agent invocation when the
+    spans hold none -- a partial trace, or a framework that emits no turn span.
+    This is the same reading FluentTestCase.from_spans does for its own input.
+
+    Args:
+        spans: Spans of the recorded run, in any order.
+
+    Returns:
+        One entry per turn.
+
+    Raises:
+        ValueError: If the spans carry no input at all.
+    """
+    ordered = sorted(spans or [], key=lambda span: getattr(span, "start_time", 0) or 0)
+
+    inputs = tuple(text for text in
+                   (get_input_from_span(span) for span in ordered
+                    if (span.attributes or {}).get("span.type") in TURN_SPAN_TYPES)
+                   if text)
+    if inputs:
+        return inputs
+
+    for span in ordered:
+        if (span.attributes or {}).get("span.type") == SpanType.AGENTIC_INVOCATION.value:
+            text = get_input_from_span(span)
+            if text:
+                return (text,)
+
+    raise ValueError(
+        "the loaded trace has no turn or agent invocation input to replay")
