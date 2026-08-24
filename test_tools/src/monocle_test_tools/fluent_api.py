@@ -96,6 +96,10 @@ class TraceAssertion():
     # for eval-only filtered runs. Threaded through @collect_assertions like
     # _filtered_spans so the (decorated) check_eval can read it.
     _okahu_filter: Optional[dict] = None
+    # Whether this chain drives its assertions from a testcase. Set by the first
+    # decorated call and threaded per-chain by @collect_assertions; declared here
+    # like _okahu_filter so an instance built outside __init__ still reads None.
+    _testcase_mode: Optional[bool] = None
     # Uniform eval report (filter mode = N facts; span mode = 1 fact). Class-scoped
     # like _last_eval so accessors on the fixture's original asserter can read it.
     _eval_report: Optional[dict] = None
