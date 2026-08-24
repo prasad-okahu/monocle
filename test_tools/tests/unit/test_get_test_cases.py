@@ -386,3 +386,76 @@ class TestLiveResponseShape:
         cases = OkahuEval.get_test_cases(**WINDOW)
 
         assert cases[0].evals == [Eval(name="user_input_validity", result="valid")]
+
+
+class TestEmptyEndpointFallsBackToProd:
+    """An empty OKAHU_API_ENDPOINT must fall back to prod, not build a hostless URL.
+
+    tests/integration/__init__.py does os.environ.setdefault("OKAHU_API_ENDPOINT", ""),
+    so the variable is *set but empty* for every integration run. os.getenv(name,
+    DEFAULT) returns "" in that case -- the default only applies when the name is
+    absent -- which produced the hostless URL "/api/v1/workflows/.../evals/report"
+    and a MissingSchema error.
+    """
+
+    def test_empty_api_endpoint_uses_prod_host(self, post, monkeypatch):
+        monkeypatch.setenv("OKAHU_API_ENDPOINT", "")
+        _queue(post, {"results": []})
+
+        OkahuEval.get_test_cases(**WINDOW)
+
+        assert post["calls"][0]["url"] == (
+            "https://api.okahu.co/api/v1/workflows/wf/evals/report")
+
+    def test_unset_api_endpoint_uses_prod_host(self, post, monkeypatch):
+        monkeypatch.delenv("OKAHU_API_ENDPOINT", raising=False)
+        _queue(post, {"results": []})
+
+        OkahuEval.get_test_cases(**WINDOW)
+
+        assert post["calls"][0]["url"].startswith("https://api.okahu.co/api/")
+
+    def test_explicit_api_endpoint_still_wins(self, post, monkeypatch):
+        monkeypatch.setenv("OKAHU_API_ENDPOINT", "https://api-stage.okahu.co")
+        _queue(post, {"results": []})
+
+        OkahuEval.get_test_cases(**WINDOW)
+
+        assert post["calls"][0]["url"].startswith("https://api-stage.okahu.co/api/")
+
+    def test_empty_eval_endpoint_uses_prod_too(self, monkeypatch):
+        from monocle_test_tools.evals.okahu_filtered_eval import OkahuFilteredEval
+
+        monkeypatch.setenv("OKAHU_EVALUATION_ENDPOINT", "")
+
+        assert OkahuFilteredEval.from_env().eval_base == "https://eval.okahu.co/api"
+
+
+class TestSpanLoaderEmptyEndpoint:
+    """OkahuSpanLoader has the same set-but-empty trap as OkahuFilteredEval.from_env.
+
+    It bites the step right after discovery: with_trace_source(testcase=...) loads
+    the fact's spans through this base url.
+    """
+
+    def test_empty_api_endpoint_uses_prod_host(self, monkeypatch):
+        from monocle_test_tools.okahu_span_loader import OkahuSpanLoader
+
+        monkeypatch.setenv("OKAHU_API_ENDPOINT", "")
+
+        assert OkahuSpanLoader._get_api_base() == "https://api.okahu.co"
+
+    def test_explicit_endpoint_argument_still_wins(self, monkeypatch):
+        from monocle_test_tools.okahu_span_loader import OkahuSpanLoader
+
+        monkeypatch.setenv("OKAHU_API_ENDPOINT", "")
+
+        assert OkahuSpanLoader._get_api_base("https://api-stage.okahu.co/") == (
+            "https://api-stage.okahu.co")
+
+    def test_env_endpoint_still_wins_when_set(self, monkeypatch):
+        from monocle_test_tools.okahu_span_loader import OkahuSpanLoader
+
+        monkeypatch.setenv("OKAHU_API_ENDPOINT", "https://api-stage.okahu.co")
+
+        assert OkahuSpanLoader._get_api_base() == "https://api-stage.okahu.co"

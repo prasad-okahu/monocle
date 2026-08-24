@@ -29,8 +29,15 @@ class OkahuSpanLoader:
 
     @staticmethod
     def _get_api_base(endpoint: Optional[str] = None) -> str:
-        """Return the Okahu API base URL (no trailing slash)."""
-        return (endpoint or os.environ.get("OKAHU_API_ENDPOINT", OkahuSpanLoader.OKAHU_BASE_URL)).rstrip("/")
+        """Return the Okahu API base URL (no trailing slash).
+
+        ``or OKAHU_BASE_URL`` rather than a getenv default: the variable is
+        set-but-empty under pytest (tests/integration/__init__.py setdefaults it
+        to ""), and an empty base builds a hostless URL that fails with
+        MissingSchema instead of falling back to prod.
+        """
+        return (endpoint or os.environ.get("OKAHU_API_ENDPOINT")
+                or OkahuSpanLoader.OKAHU_BASE_URL).rstrip("/")
 
     @staticmethod
     def _get_headers(api_key: Optional[str] = None) -> dict:
