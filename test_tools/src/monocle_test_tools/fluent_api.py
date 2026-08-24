@@ -66,6 +66,11 @@ class TraceAssertion():
     # (class-qualified) and otherwise mutate in place (`.update(...)`) so
     # the fixture's `traceAssertion.__last_eval` sees the same object.
     _last_eval: Optional[dict[str, Any]] = None
+    # Every eval run this test performed, oldest first. `_last_eval` is the final
+    # entry; this list exists because one check_eval call can now run several
+    # evals, and the results matrix must show all of them rather than the last.
+    # Class-level for the same reason `_last_eval` is -- see the note above.
+    _eval_stashes: list[dict[str, Any]] = []
     # Filter scope recorded by with_trace_source("okahu", start_time=..., end_time=...)
     # for eval-only filtered runs. Threaded through @collect_assertions like
     # _filtered_spans so the (decorated) check_eval can read it.
@@ -133,6 +138,7 @@ class TraceAssertion():
         self._okahu_filter = None
         TraceAssertion._assertion_errors = []
         TraceAssertion._last_eval = None
+        TraceAssertion._eval_stashes = []
         TraceAssertion._eval_report = None
 
     @staticmethod
@@ -921,6 +927,41 @@ class TraceAssertion():
                 min_facts=min_facts, fail_threshold=fail_threshold, max_facts=max_facts,
                 message=message)
 
+        failures, fact_records = self._check_eval_one(
+            eval_name=eval_name, expected=expected, not_expected=not_expected,
+            fact_name=fact_name, template_path=template_path, template=template,
+            message=message)
+        TraceAssertion._eval_report = build_filtered_report(
+            expected, not_expected, fact_records, job_id=None)
+        self._raise_eval_failures(eval_name, failures, len(fact_records), message)
+        return self
+
+    @staticmethod
+    def _raise_eval_failures(eval_name:str, failures:list[str], fact_count:int,
+                             message:Optional[str]) -> None:
+        """Raise one AssertionError covering every failure, or return quietly."""
+        if not failures:
+            return
+        if message:
+            raise AssertionError(message)
+        if len(failures) == 1:
+            raise AssertionError(failures[0])
+        raise AssertionError(
+            f"Evaluation '{eval_name}' failed for {len(failures)} of {fact_count} facts:"
+            + "".join(f"{os.linesep}  - {failure}" for failure in failures))
+
+    def _check_eval_one(self, *, eval_name, expected, not_expected, fact_name,
+                        template_path, template, message=None) -> tuple:
+        """Run one eval against the current spans and return its outcome.
+
+        Returns rather than raises so a caller running several evals can report
+        every failure: record_assertion only keeps the first AssertionError of a
+        chain, so N raises would surface as one.
+
+        Returns:
+            ``(failures, fact_records)`` -- the failure messages, and one report
+            record per graded fact for build_filtered_report.
+        """
         if sum(bool(x) for x in (eval_name, template_path, template)) != 1:
             raise ValueError(
                 "Provide exactly one of 'eval_name' (for Okahu templates), "
@@ -990,6 +1031,9 @@ class TraceAssertion():
             "judge_output": {},
             "total_tokens": None,
         }
+        # Appended, not replaced: one check_eval call can run several evals and
+        # the results matrix must show every one of them.
+        TraceAssertion._eval_stashes = TraceAssertion._eval_stashes + [TraceAssertion._last_eval]
 
         eval_result, explanation = self._eval.evaluate(filtered_spans=self._filtered_spans, eval_name=eval_name, fact_name=fact_name, template=template)
 
@@ -1011,14 +1055,6 @@ class TraceAssertion():
         else:
             facts = [(trace_id, eval_result, explanation)]
 
-        TraceAssertion._eval_report = build_filtered_report(
-            expected, not_expected,
-            [{"fact_id": fact_id, "job_id": None, "eval_found": True,
-              "eval_result": {"label": eval_result, "explanation": explanation}, "workflow": ""}
-             for fact_id, eval_result, explanation in facts],
-            job_id=None)
-
-
         failures = []
         for fact_id, eval_result, explanation in facts:
             if positive and eval_result not in positive:
@@ -1026,16 +1062,10 @@ class TraceAssertion():
             elif negative and eval_result in negative:
                 failures.append(f"Evaluation '{eval_name}' matched an unexpected result for fact '{fact_id}'. Should not be any of {negative}. Received '{eval_result}'. \n Explanation: {explanation}")
 
-        if failures:
-            if message:
-                raise AssertionError(message)
-            if len(failures) == 1:
-                raise AssertionError(failures[0])
-            raise AssertionError(
-                f"Evaluation '{eval_name}' failed for {len(failures)} of {len(facts)} facts:"
-                + "".join(f"{os.linesep}  - {failure}" for failure in failures))
-
-        return self
+        return failures, [{"fact_id": fact_id, "job_id": None, "eval_found": True,
+                           "eval_result": {"label": label, "explanation": explanation},
+                           "workflow": ""}
+                          for fact_id, label, explanation in facts]
 
     def _check_eval_filtered(self, scope, *, eval_name, expected, not_expected,
                              template_path, template, min_facts, fail_threshold,
