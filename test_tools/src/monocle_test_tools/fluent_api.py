@@ -220,7 +220,9 @@ class TraceAssertion():
         self._comparer = get_comparer(comparer)
         return self
 
-    def with_trace_source(self, source: str = "local", **kwargs) -> 'TraceAssertion':
+    def with_trace_source(self, source: Optional[str] = None,
+                          testcase:Optional[Union[FluentTestCase, dict]] = None,
+                          **kwargs) -> 'TraceAssertion':
         """Configure trace source for assertions.
 
         Args:
@@ -228,6 +230,11 @@ class TraceAssertion():
                 - ``"local"`` (default) — Use traces from memory (current execution).
                 - ``"file"`` — Load traces from local .monocle/*.json files.
                 - ``"okahu"`` — Fetch traces from Okahu cloud.
+            testcase: A FluentTestCase (or a dict in any shape it accepts) whose
+                input is a FactID. It supplies ``id``, ``fact_name`` and
+                ``scope_name``, which therefore may not also be passed.
+                ``source`` and ``workflow_name`` remain explicit configuration
+                and may accompany it; ``source`` falls back to the FactID's own.
             **kwargs: Additional arguments passed to ``import_traces()`` when
                 source is "file" or "okahu". Common arguments:
                 - id (str): Trace/session/scope ID
@@ -265,6 +272,23 @@ class TraceAssertion():
                 workflow_name="my_app"
             ).called_tool("search")
         """
+        if testcase is not None:
+            # Only the *identifying* arguments conflict: source and workflow_name
+            # stay explicit configuration a test case does not carry.
+            testcase = resolve_testcase(
+                testcase, id=kwargs.get("id"), fact_name=kwargs.get("fact_name"),
+                scope_name=kwargs.get("scope_name"))
+            if not isinstance(testcase.input, FactID):
+                raise ValueError(
+                    f"with_trace_source needs a FactID input to load from; testcase "
+                    f"'{testcase.name}' has {type(testcase.input).__name__}")
+            kwargs.update(factid_import_kwargs(testcase.input))
+            source = source or kwargs.pop("trace_source")
+            kwargs.pop("trace_source", None)
+
+        if source is None:
+            source = "local"
+
         window_kwargs = ("start_time", "end_time")
         has_window = any(kwargs.get(k) is not None for k in window_kwargs)
 
