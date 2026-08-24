@@ -85,10 +85,17 @@ class OkahuEval(BaseEval):
         the shape ``with_trace_source(testcase=...)`` and ``check_eval(testcase=...)``
         consume, which makes the result directly parametrizable.
 
-        A row's label is taken from ``authoritative``, falling back to the newest
-        entry in ``latest``. Rows with neither are skipped, and a fact left with no
-        labelled eval yields no test case at all -- an empty ``evals`` list would
-        raise in check_eval, so emitting one would only manufacture a broken case.
+        A row's label is taken from ``authoritative.eval_result.label``, falling
+        back to the newest entry in ``latest``. Rows with neither are skipped, and a
+        fact left with no labelled eval yields no test case at all -- an empty
+        ``evals`` list would raise in check_eval, so emitting one would only
+        manufacture a broken case.
+
+        Custom evals (``eval_id`` prefixed ``custom_evaluation__``) are returned
+        like any other, by name. Okahu does not store their templates, so if such a
+        name does not also resolve as a stored template, the case will fail when
+        check_eval runs it rather than being filtered out here -- deliberate, so the
+        report is reflected as-is instead of silently shrinking.
 
         Args:
             workflow_name: Okahu workflow / service name.
