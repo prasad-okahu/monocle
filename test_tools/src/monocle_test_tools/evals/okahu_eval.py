@@ -70,7 +70,7 @@ class OkahuEval(BaseEval):
     @classmethod
     def get_test_cases(cls, *, workflow_name: str, start_time: str, end_time: str,
                        fact_name: str = "traces",
-                       category: Union[str, list] = "llm",
+                       category: Union[str, list] = ["llm", "manual"],
                        eval_name: Optional[str] = None,
                        page_size: int = 100) -> list:
         """Build FluentTestCases from the evals already recorded on a workflow.
@@ -103,8 +103,9 @@ class OkahuEval(BaseEval):
             end_time: Window end. Required.
             fact_name: User-facing fact level, mapped to the Okahu name for the
                 request. The returned FactIDs keep the user-facing name.
-            category: ``"llm"`` (default), ``"manual"`` or ``"test"``, or a list of
-                them. Always sent as a list.
+            category: Which eval runs to consider -- ``"llm"``, ``"manual"`` or
+                ``"test"``, or a list of them; defaults to ``["llm", "manual"]``.
+                A bare string is wrapped, so this is always sent as a list.
             eval_name: Restrict to a single eval. Omitted means every eval supported
                 for the fact level. ``"custom"`` is rejected by discovery.
             page_size: Rows per page (server max 1000).

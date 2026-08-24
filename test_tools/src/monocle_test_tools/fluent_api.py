@@ -35,18 +35,24 @@ def get_test_cases(source:str = "okahu", eval_name:Optional[str] = None,
     ``run_agent(testcase=...)`` and ``check_eval(testcase=...)``.
 
     Args:
-        source: Trace source. Only ``"okahu"`` is supported -- discovery needs a
-            queryable eval store, which the file source does not have.
+        source: Where the cases come from:
+            - ``"okahu"`` (default) -- discover them from the evals recorded in
+              the Okahu eval store.
+            - ``"local"`` -- load a committed JSON array from ``path``.
         eval_name: Restrict to a single eval. Omitted means every eval recorded.
-        **kwargs: Passed to the source's discovery call. For okahu:
-            workflow_name, start_time and end_time (all required), plus optional
-            fact_name, category and page_size. See OkahuEval.get_test_cases.
+            Only meaningful for okahu, where it filters the query.
+        **kwargs: Passed to the source. For okahu: workflow_name, start_time and
+            end_time (all required), plus optional fact_name, category and
+            page_size -- see OkahuEval.get_test_cases. For local: ``path``.
 
     Returns:
-        One FluentTestCase per fact that has at least one labelled eval.
+        For okahu, one FluentTestCase per fact that has at least one labelled
+        eval; for local, one per element of the file, in file order.
 
     Raises:
-        ValueError: If *source* is anything but "okahu".
+        ValueError: If *source* is unsupported, if ``path`` is missing or given
+            alongside eval_name for the local source, or if the file is malformed.
+        FileNotFoundError: If the local ``path`` does not exist.
 
     Example:
         CASES = get_test_cases(source="okahu", workflow_name="wf",
@@ -57,11 +63,31 @@ def get_test_cases(source:str = "okahu", eval_name:Optional[str] = None,
             monocle_trace_asserter.with_trace_source(testcase=testcase,
                                                      workflow_name="wf")
             monocle_trace_asserter.check_eval(testcase=testcase)
+
+        # Freeze that set once, then re-run it with no network call:
+        #   json.dump([c.model_dump() for c in CASES], open("cases.json", "w"))
+        CASES = get_test_cases(source="local", path="cases.json")
     """
+    if source == "local":
+        path = kwargs.pop("path", None)
+        if not path:
+            raise ValueError(
+                "'path' is required for source='local'; it names the JSON file "
+                "holding the array of test cases.")
+        if eval_name is not None:
+            raise ValueError(
+                "'eval_name' cannot be combined with source='local'; it filters the "
+                "okahu query, and for a file the file itself is the set of cases.")
+        if kwargs:
+            raise ValueError(
+                f"source='local' takes only 'path'; got {sorted(kwargs)}")
+        from .testcase import load_test_cases_from_json
+        return load_test_cases_from_json(path)
+
     if source != "okahu":
         raise ValueError(
-            f"get_test_cases does not support source '{source}'; only 'okahu' is "
-            "supported, since discovering recorded evals needs a queryable eval store.")
+            f"get_test_cases does not support source '{source}'; supported sources "
+            "are 'okahu' (discover from the eval store) and 'local' (a JSON file).")
     from .evals.okahu_eval import OkahuEval
     return OkahuEval.get_test_cases(eval_name=eval_name, **kwargs)
 

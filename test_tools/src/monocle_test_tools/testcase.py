@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, Sequence, Tuple, Union
 from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
@@ -257,6 +258,53 @@ class FluentTestCase(BaseModel):
             evals=[ev if isinstance(ev, Eval) else Eval.model_validate(ev) for ev in evals or []],
             token_limit=_total_tokens(ordered_spans) or None,
         )
+
+
+def load_test_cases_from_json(path: Union[str, Path]) -> list["FluentTestCase"]:
+    """Load a JSON array of test cases from a file.
+
+    Each element is parsed by FluentTestCase itself, so a committed file may be
+    written in any shape a parametrize literal can use -- the ``expected``
+    wrapper, evals as a name-to-result mapping, a scalar input. The model also
+    serializes back into a shape it accepts, so a discovered set can be dumped,
+    committed, and reloaded later: that round trip is the point of this, turning
+    "what the evals said today" into a golden dataset with no network call.
+
+    Args:
+        path: Path to a .json file holding an array of test cases.
+
+    Returns:
+        The test cases, in file order.
+
+    Raises:
+        FileNotFoundError: If *path* does not exist.
+        ValueError: If the file is not valid JSON, does not hold an array, or
+            holds an element that is not a valid test case. Every message names
+            the path, and an invalid element names its index -- a typo in case 7
+            of 40 should say 7.
+    """
+    path = Path(path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Test case file not found: {path}")
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Test case file is not valid JSON: {path} - {exc}") from exc
+
+    if not isinstance(data, list):
+        raise ValueError(
+            f"Test case file must hold an array of test cases, got "
+            f"{type(data).__name__}: {path}")
+
+    test_cases = []
+    for index, entry in enumerate(data):
+        try:
+            test_cases.append(FluentTestCase.model_validate(entry))
+        except ValueError as exc:
+            raise ValueError(
+                f"test case {index} in {path} is not valid: {exc}") from exc
+    return test_cases
 
 
 def _span_type(span: ReadableSpan) -> str:

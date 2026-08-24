@@ -104,12 +104,12 @@ class TestRequestBody:
 
         assert "fact_ids" not in post["calls"][0]["body"]
 
-    def test_category_defaults_to_llm_as_a_list(self, post):
+    def test_category_defaults_to_llm_and_manual(self, post):
         _queue(post, {"results": []})
 
         OkahuEval.get_test_cases(**WINDOW)
 
-        assert post["calls"][0]["body"]["category"] == ["llm"]
+        assert post["calls"][0]["body"]["category"] == ["llm", "manual"]
 
     def test_category_string_is_wrapped(self, post):
         _queue(post, {"results": []})
@@ -297,9 +297,10 @@ class TestFluentEntryPoint:
 
         assert post["calls"][0]["url"].endswith("/evals/report")
 
-    @pytest.mark.parametrize("source", ["file", "local", "s3"])
-    def test_other_sources_are_rejected(self, source):
-        with pytest.raises(ValueError, match="only 'okahu'"):
+    @pytest.mark.parametrize("source", ["file", "s3", "memory"])
+    def test_unsupported_sources_are_rejected(self, source):
+        """'local' is supported (see TestLocalSource); these are not."""
+        with pytest.raises(ValueError, match="does not support source"):
             get_test_cases(source=source, **WINDOW)
 
 
@@ -459,3 +460,102 @@ class TestSpanLoaderEmptyEndpoint:
         monkeypatch.setenv("OKAHU_API_ENDPOINT", "https://api-stage.okahu.co")
 
         assert OkahuSpanLoader._get_api_base() == "https://api-stage.okahu.co"
+
+
+class TestLocalSource:
+    """get_test_cases(source="local", path=...) loads a committed JSON array.
+
+    The point is the golden-dataset workflow: freeze what Okahu returned today,
+    commit it, and re-run it later with no network call.
+    """
+
+    def _write(self, tmp_path, payload):
+        import json
+        path = tmp_path / "cases.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return str(path)
+
+    def test_loads_an_array_of_cases(self, tmp_path):
+        path = self._write(tmp_path, [
+            {"input": {"fact_id": "aaa", "fact_name": "traces", "source": "okahu"},
+             "expected": {"evals": {"hallucination": "major_hallucination"}}},
+            {"input": {"fact_id": "bbb", "fact_name": "traces", "source": "okahu"},
+             "expected": {"evals": {"hallucination": "no_hallucination"}}},
+        ])
+
+        cases = get_test_cases(source="local", path=path)
+
+        assert [c.input.fact_id for c in cases] == ["aaa", "bbb"]
+        assert cases[0].evals == [Eval(name="hallucination",
+                                       result="major_hallucination")]
+
+    def test_accepts_the_same_shapes_a_parametrize_literal_does(self, tmp_path):
+        """expected wrapper, evals as a mapping, scalar input -- all normalized."""
+        path = self._write(tmp_path, [
+            {"name": "t1", "input": "Book a flight",
+             "expected": {"evals": {"hallucination": "minor", "sentiment": "positive"},
+                          "token_limit": 5000}},
+        ])
+
+        cases = get_test_cases(source="local", path=path)
+
+        assert cases[0].input == ("Book a flight",)
+        assert cases[0].token_limit == 5000
+        assert [e.name for e in cases[0].evals] == ["hallucination", "sentiment"]
+
+    def test_round_trips_a_dumped_discovery_result(self, tmp_path, post):
+        """Discover -> dump -> load must produce an equal set of cases."""
+        _queue(post, {"results": [_row("aaa", "hallucination", "minor_hallucination"),
+                                  _row("bbb", "sentiment", "positive")]})
+        discovered = OkahuEval.get_test_cases(**WINDOW)
+        path = self._write(tmp_path, [c.model_dump() for c in discovered])
+
+        assert get_test_cases(source="local", path=path) == discovered
+
+    def test_makes_no_network_call(self, tmp_path, post):
+        path = self._write(tmp_path, [{"evals": {"hallucination": "minor"}}])
+
+        get_test_cases(source="local", path=path)
+
+        assert post["calls"] == []
+
+    def test_empty_array_gives_no_cases(self, tmp_path):
+        assert get_test_cases(source="local", path=self._write(tmp_path, [])) == []
+
+    def test_path_is_required(self):
+        with pytest.raises(ValueError, match="'path' is required"):
+            get_test_cases(source="local")
+
+    def test_missing_file_raises_naming_the_path(self, tmp_path):
+        missing = str(tmp_path / "nope.json")
+
+        with pytest.raises(FileNotFoundError, match="nope.json"):
+            get_test_cases(source="local", path=missing)
+
+    def test_invalid_json_raises_naming_the_path(self, tmp_path):
+        path = tmp_path / "bad.json"
+        path.write_text("{not json", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="bad.json"):
+            get_test_cases(source="local", path=str(path))
+
+    def test_top_level_object_is_rejected(self, tmp_path):
+        path = self._write(tmp_path, {"evals": {"hallucination": "minor"}})
+
+        with pytest.raises(ValueError, match="array of test cases"):
+            get_test_cases(source="local", path=path)
+
+    def test_a_bad_element_names_its_index(self, tmp_path):
+        path = self._write(tmp_path, [
+            {"evals": {"hallucination": "minor"}},
+            {"evels": {"hallucination": "minor"}},
+        ])
+
+        with pytest.raises(ValueError, match=r"test case 1\b"):
+            get_test_cases(source="local", path=path)
+
+    def test_eval_name_is_rejected_for_local(self, tmp_path):
+        path = self._write(tmp_path, [{"evals": {"hallucination": "minor"}}])
+
+        with pytest.raises(ValueError, match="eval_name"):
+            get_test_cases(source="local", path=path, eval_name="hallucination")
