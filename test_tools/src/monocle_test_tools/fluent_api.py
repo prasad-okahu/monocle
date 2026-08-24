@@ -9,8 +9,11 @@ from monocle_apptrace.instrumentation.common.utils import get_workflow_name
 from monocle_test_tools import eval_matrix
 from monocle_test_tools.constants import CUSTOM_EVAL_TYPE
 from monocle_test_tools.evals.okahu_filtered_eval import build_filtered_report
-from monocle_test_tools.schema import Evaluation
+from monocle_test_tools.schema import Evaluation, FactID
 from monocle_test_tools.span_loader import JSONSpanLoader, OkahuSpanLoader
+from monocle_test_tools.testcase import FluentTestCase
+from monocle_test_tools.testcase_args import (factid_import_kwargs, resolve_testcase,
+                                              turn_inputs_from_spans)
 from .comparer.comparer_manager import get_comparer
 from .comparer.base_comparer import BaseComparer
 from .comparer.default_comparer import DefaultComparer
@@ -154,16 +157,50 @@ class TraceAssertion():
             if actual_count == 0:
                 raise AssertionError(message or f"No {entity_type} invocations found")
 
-    def run_agent(self, agent, agent_type:str, *args, **kwargs) -> any:
-        """Run the given agent with provided args and kwargs."""
+    def _testcase_run_args(self, testcase:Union[FluentTestCase, dict], args:tuple) -> tuple:
+        """The positional arguments a test case says to run the agent with.
+
+        A FactID input means the run is a replay: the recorded trace is fetched
+        only to recover the prompt it was driven with, so it is fetched with
+        load_spans=False. Loading it would leave the *source* trace's spans and
+        fact id on the validator, and the assertions that follow are about the
+        new run, not the old one.
+
+        workflow_name is deliberately not taken from the caller's kwargs -- those
+        belong to the agent runner. The okahu fetch falls back to
+        import_traces' own get_workflow_name(), which raises a clear error of its
+        own when it cannot resolve.
+        """
+        testcase = resolve_testcase(testcase, args=args)
+        if testcase.input is None:
+            raise ValueError(
+                f"testcase '{testcase.name}' has no input to run the agent with")
+        if isinstance(testcase.input, FactID):
+            spans = self.validator.import_traces(
+                **factid_import_kwargs(testcase.input), load_spans=False)
+            return turn_inputs_from_spans(spans)
+        return tuple(testcase.input)
+
+    def run_agent(self, agent, agent_type:str, *args, testcase:Optional[Union[FluentTestCase, dict]] = None, **kwargs) -> any:
+        """Run the given agent with provided args and kwargs.
+
+        Pass ``testcase`` instead of positional args to take the input from a
+        FluentTestCase. When its input is a FactID, the recorded trace is loaded
+        and the prompt it was run with is replayed against this agent.
+        """
+        if testcase is not None:
+            args = self._testcase_run_args(testcase, args)
         return self.validator.run_agent(agent, agent_type, *args, mock_tools=self.mock_tools, **kwargs)
 
-    async def run_agent_async(self, agent, agent_type:str, *args, session_id:str=None, turn_id:str=None, **kwargs) -> any:
+    async def run_agent_async(self, agent, agent_type:str, *args, session_id:str=None, turn_id:str=None, testcase:Optional[Union[FluentTestCase, dict]] = None, **kwargs) -> any:
         """Run the given async agent with provided args and kwargs.
 
         Pass ``turn_id`` to tag every span produced by this run with a
-        ``scope.turn_id`` attribute.
+        ``scope.turn_id`` attribute. Pass ``testcase`` instead of positional args
+        to take the input from a FluentTestCase, as ``run_agent`` does.
         """
+        if testcase is not None:
+            args = self._testcase_run_args(testcase, args)
         return await self.validator.run_agent_async(agent, agent_type, *args, session_id=session_id, turn_id=turn_id, mock_tools=self.mock_tools, **kwargs)
 
     def with_mock_tool(self, mock_tool:MockTool) -> 'TraceAssertion':
