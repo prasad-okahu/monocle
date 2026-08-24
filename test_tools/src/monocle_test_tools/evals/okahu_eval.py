@@ -67,6 +67,143 @@ class OkahuEval(BaseEval):
         from monocle_test_tools.evals.okahu_eval_discovery import discover_fact_evals as _discover
         return _discover(spans, fact_name=fact_name)
 
+    @classmethod
+    def get_test_cases(cls, *, workflow_name: str, start_time: str, end_time: str,
+                       fact_name: str = "traces",
+                       category: Union[str, list] = "llm",
+                       eval_name: Optional[str] = None,
+                       page_size: int = 100) -> list:
+        """Build FluentTestCases from the evals already recorded on a workflow.
+
+        Calls ``/v1/workflows/{workflow_name}/evals/report`` in *discovery* mode --
+        selected by sending no ``fact_ids``, which makes the server enumerate every
+        fact in the time window rather than reporting on ones you name.
+
+        The endpoint answers one row per (fact_id, eval_name); the rows are grouped
+        back into one test case per fact, so each returned case points at a fact and
+        carries every eval recorded on it as the expected results. That is exactly
+        the shape ``with_trace_source(testcase=...)`` and ``check_eval(testcase=...)``
+        consume, which makes the result directly parametrizable.
+
+        A row's label is taken from ``authoritative``, falling back to the newest
+        entry in ``latest``. Rows with neither are skipped, and a fact left with no
+        labelled eval yields no test case at all -- an empty ``evals`` list would
+        raise in check_eval, so emitting one would only manufacture a broken case.
+
+        Args:
+            workflow_name: Okahu workflow / service name.
+            start_time: Window start. Required -- discovery has no silent default.
+            end_time: Window end. Required.
+            fact_name: User-facing fact level, mapped to the Okahu name for the
+                request. The returned FactIDs keep the user-facing name.
+            category: ``"llm"`` (default), ``"manual"`` or ``"test"``, or a list of
+                them. Always sent as a list.
+            eval_name: Restrict to a single eval. Omitted means every eval supported
+                for the fact level. ``"custom"`` is rejected by discovery.
+            page_size: Rows per page (server max 1000).
+
+        Returns:
+            One FluentTestCase per fact that has at least one labelled eval.
+
+        Raises:
+            ValueError: If eval_name is "custom", or fact_name is not recognized.
+            AssertionError: If the report service cannot be reached or errors.
+        """
+        # Local imports: monocle_test_tools.schema is still partially initialized
+        # when this module is first imported (schema -> ... -> evals -> okahu_eval),
+        # so importing FactID at module scope raises. Verified, not precautionary.
+        from monocle_test_tools.evals.okahu_filtered_eval import (OkahuFilteredEval,
+                                                                  normalize_fact_id)
+        from monocle_test_tools.schema import FactID
+        from monocle_test_tools.testcase import Eval, FluentTestCase
+
+        if eval_name == "custom":
+            raise ValueError(
+                "eval_name='custom' is not supported by eval discovery; custom "
+                "templates are not stored, so there is nothing to discover by name.")
+
+        body = {
+            "fact_name": cls._map_fact_name(fact_name),
+            "start_time": start_time,
+            "end_time": end_time,
+            "category": [category] if isinstance(category, str) else list(category),
+            "page_size": page_size,
+        }
+        if eval_name:
+            body["eval_names"] = [eval_name]
+
+        client = OkahuFilteredEval.from_env()
+        url = f"{client.api_base}/v1/workflows/{workflow_name}/evals/report"
+
+        # One entry per fact, insertion-ordered so the cases come back in the order
+        # the server reported them.
+        evals_by_fact: dict = {}
+        for row in cls._iter_eval_report_rows(client, url, body):
+            label = cls._report_row_label(row)
+            if label is None:
+                continue
+            fact_id = normalize_fact_id(row.get("fact_id"))
+            if not fact_id:
+                continue
+            evals_by_fact.setdefault(fact_id, []).append(
+                Eval(name=row.get("eval_name"), result=label))
+
+        return [FluentTestCase(
+                    name=fact_id,
+                    input=FactID(fact_id=fact_id, fact_name=fact_name, source="okahu"),
+                    evals=evals)
+                for fact_id, evals in evals_by_fact.items()]
+
+    @staticmethod
+    def _iter_eval_report_rows(client, url: str, body: dict):
+        """Yield every ``results`` row of ``/evals/report``, following page tokens.
+
+        A separate pager from ``OkahuFilteredEval._paginate_post``: that one walks
+        ``limit``/``offset``, while the report endpoint walks
+        ``page_size``/``page_token`` and signals the end by omitting
+        ``next_page_token``.
+        """
+        page_token = None
+        while True:
+            page_body = {**body, "page_token": page_token} if page_token else body
+            try:
+                response = requests.post(url=url, headers=client.headers,
+                                         json=page_body, timeout=60)
+                response.raise_for_status()
+                payload = response.json()
+            except requests.Timeout as exc:
+                raise AssertionError(f"Eval report request timed out: {exc}") from exc
+            except requests.HTTPError as exc:
+                raise AssertionError(
+                    f"Eval report service returned HTTP {response.status_code}: "
+                    f"{response.text or '<empty body>'}") from exc
+            except requests.RequestException as exc:
+                raise AssertionError(f"Failed to reach eval report service: {exc}") from exc
+            except ValueError as exc:
+                raise AssertionError(
+                    f"Eval report service returned invalid JSON: {response.text}") from exc
+
+            yield from payload.get("results") or []
+
+            page_token = payload.get("next_page_token")
+            if not page_token:
+                return
+
+    @staticmethod
+    def _report_row_label(row: dict) -> Optional[str]:
+        """The settled label of one /evals/report row, or None when it has none.
+
+        ``authoritative`` is the row's decided result; ``latest`` holds recent runs
+        newest-first and is the fallback for a row not yet settled.
+        """
+        if not row or not row.get("eval_found"):
+            return None
+        label = (row.get("authoritative") or {}).get("label")
+        if label:
+            return label
+        latest = row.get("latest") or []
+        return (latest[0] or {}).get("label") if latest else None
+
     @staticmethod
     def _map_fact_name(fact_name: str) -> str:
         """

@@ -25,6 +25,46 @@ from .trace_utils import get_function_signature, get_caller_file_line
 from .schema import MockTool
 from opentelemetry.sdk.trace import Span
 
+def get_test_cases(source:str = "okahu", eval_name:Optional[str] = None,
+                   **kwargs) -> list[FluentTestCase]:
+    """Build FluentTestCases from evals already recorded on a trace source.
+
+    Turns a recorded population into a parametrizable list: each returned case
+    points at one fact and carries the evals recorded on it as the expected
+    results, ready to hand to ``with_trace_source(testcase=...)`` /
+    ``run_agent(testcase=...)`` and ``check_eval(testcase=...)``.
+
+    Args:
+        source: Trace source. Only ``"okahu"`` is supported -- discovery needs a
+            queryable eval store, which the file source does not have.
+        eval_name: Restrict to a single eval. Omitted means every eval recorded.
+        **kwargs: Passed to the source's discovery call. For okahu:
+            workflow_name, start_time and end_time (all required), plus optional
+            fact_name, category and page_size. See OkahuEval.get_test_cases.
+
+    Returns:
+        One FluentTestCase per fact that has at least one labelled eval.
+
+    Raises:
+        ValueError: If *source* is anything but "okahu".
+
+    Example:
+        CASES = get_test_cases(source="okahu", workflow_name="wf",
+                               start_time="2026-05-01", end_time="2026-06-30")
+
+        @pytest.mark.parametrize("testcase", CASES)
+        def test_regression(monocle_trace_asserter, testcase):
+            monocle_trace_asserter.with_trace_source(testcase=testcase,
+                                                     workflow_name="wf")
+            monocle_trace_asserter.check_eval(testcase=testcase)
+    """
+    if source != "okahu":
+        raise ValueError(
+            f"get_test_cases does not support source '{source}'; only 'okahu' is "
+            "supported, since discovering recorded evals needs a queryable eval store.")
+    from .evals.okahu_eval import OkahuEval
+    return OkahuEval.get_test_cases(eval_name=eval_name, **kwargs)
+
 def collect_assertions(func):
     """
         A decorator to collect assertion errors from fluent API methods. This supresses the AssertionError and collects all the assertions
