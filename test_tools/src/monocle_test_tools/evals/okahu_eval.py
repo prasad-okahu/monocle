@@ -73,17 +73,28 @@ class OkahuEval(BaseEval):
                        category: Union[str, list] = ["llm", "manual"],
                        eval_name: Optional[str] = None,
                        page_size: int = 100) -> list:
-        """Build FluentTestCases from the evals already recorded on a workflow.
+        """Build FluentTestCases from the traces recorded for a workflow.
 
-        Calls ``/v1/workflows/{workflow_name}/evals/report`` in *discovery* mode --
-        selected by sending no ``fact_ids``, which makes the server enumerate every
-        fact in the time window rather than reporting on ones you name.
+        Two steps. First ``OkahuSpanLoader.get_trace_ids`` enumerates the traces in
+        the time window -- those ARE the test cases, one each, with the trace as the
+        FactID input. Then, only when ``eval_name`` is given,
+        ``/v1/workflows/{workflow_name}/evals/report`` is asked about exactly those
+        traces (``fact_ids``) and that eval, and the labels it returns become each
+        case's expected results.
 
-        The endpoint answers one row per (fact_id, eval_name); the rows are grouped
-        back into one test case per fact, so each returned case points at a fact and
-        carries every eval recorded on it as the expected results. That is exactly
-        the shape ``with_trace_source(testcase=...)`` and ``check_eval(testcase=...)``
-        consume, which makes the result directly parametrizable.
+        Sending ``fact_ids`` takes the report endpoint OUT of discovery mode -- the
+        absence of fact_ids is what selects discovery -- so it reports on traces
+        already enumerated rather than re-discovering them.
+
+        Without ``eval_name`` no report call is made at all and the cases carry no
+        evals, which is what ``run_agent(testcase=...)`` needs to replay a recorded
+        input. With one, a trace that has no labelled result for that eval is
+        dropped: an empty ``evals`` list raises in ``check_eval``, so emitting the
+        case would poison the suite it is meant to feed. The dropped count is
+        logged rather than passed over in silence.
+
+        Either way the result is directly parametrizable, being the shape
+        ``with_trace_source(testcase=...)`` and ``check_eval(testcase=...)`` consume.
 
         A row's label is taken from ``authoritative.eval_result.label``, falling
         back to the newest entry in ``latest``. Rows with neither are skipped, and a
@@ -120,32 +131,77 @@ class OkahuEval(BaseEval):
         # Local imports: monocle_test_tools.schema is still partially initialized
         # when this module is first imported (schema -> ... -> evals -> okahu_eval),
         # so importing FactID at module scope raises. Verified, not precautionary.
-        from monocle_test_tools.evals.okahu_filtered_eval import (OkahuFilteredEval,
-                                                                  normalize_fact_id)
+        from monocle_test_tools.evals.okahu_filtered_eval import normalize_fact_id
         from monocle_test_tools.schema import FactID
-        from monocle_test_tools.testcase import Eval, FluentTestCase
+        from monocle_test_tools.testcase import FluentTestCase
 
         if eval_name == "custom":
             raise ValueError(
                 "eval_name='custom' is not supported by eval discovery; custom "
                 "templates are not stored, so there is nothing to discover by name.")
 
+        from monocle_test_tools.okahu_span_loader import OkahuSpanLoader
+
+        # The traces in the window ARE the test cases. The eval report only
+        # enriches them, so it is not called at all without an eval_name.
+        fact_ids = [normalize_fact_id(tid) for tid in OkahuSpanLoader.get_trace_ids(
+            workflow_name, start_time=start_time, end_time=end_time)]
+        if not fact_ids:
+            return []
+
+        evals_by_fact = {}
+        if eval_name:
+            evals_by_fact = cls._eval_report_by_fact(
+                workflow_name=workflow_name, fact_ids=fact_ids,
+                fact_name=cls._map_fact_name(fact_name), start_time=start_time,
+                end_time=end_time, category=category, eval_name=eval_name,
+                page_size=page_size)
+
+        test_cases = []
+        for fact_id in fact_ids:
+            evals = evals_by_fact.get(fact_id, [])
+            if eval_name and not evals:
+                # Asked for a specific eval and this trace has no labelled result
+                # for it. An empty evals list raises in check_eval, so emitting the
+                # case would poison the suite it is meant to feed.
+                continue
+            test_cases.append(FluentTestCase(
+                name=fact_id,
+                input=FactID(fact_id=fact_id, fact_name=fact_name, source="okahu"),
+                evals=evals))
+
+        dropped = len(fact_ids) - len(test_cases)
+        if dropped:
+            logger.info("get_test_cases: %d of %d traces had no labelled '%s' eval "
+                        "and were dropped", dropped, len(fact_ids), eval_name)
+        return test_cases
+
+    @classmethod
+    def _eval_report_by_fact(cls, *, workflow_name, fact_ids, fact_name, start_time,
+                             end_time, category, eval_name, page_size) -> dict:
+        """Labelled evals for the given facts, keyed by bare-hex fact id.
+
+        Sends fact_ids, which takes /evals/report OUT of discovery mode -- the
+        absence of fact_ids is what selects discovery -- so this reports on the
+        traces already enumerated rather than re-discovering them.
+        """
+        from monocle_test_tools.evals.okahu_filtered_eval import (OkahuFilteredEval,
+                                                                  normalize_fact_id)
+        from monocle_test_tools.testcase import Eval
+
         body = {
-            "fact_name": cls._map_fact_name(fact_name),
+            "fact_name": fact_name,
+            "fact_ids": list(fact_ids),
             "start_time": start_time,
             "end_time": end_time,
             "category": [category] if isinstance(category, str) else list(category),
             "page_size": page_size,
+            "eval_names": [eval_name],
         }
-        if eval_name:
-            body["eval_names"] = [eval_name]
-
         client = OkahuFilteredEval.from_env()
         url = f"{client.api_base}/v1/workflows/{workflow_name}/evals/report"
 
-        # One entry per fact, insertion-ordered so the cases come back in the order
-        # the server reported them.
-        evals_by_fact: dict = {}
+        by_fact = {}
         for row in cls._iter_eval_report_rows(client, url, body):
             label = cls._report_row_label(row)
             if label is None:
@@ -153,14 +209,9 @@ class OkahuEval(BaseEval):
             fact_id = normalize_fact_id(row.get("fact_id"))
             if not fact_id:
                 continue
-            evals_by_fact.setdefault(fact_id, []).append(
+            by_fact.setdefault(fact_id, []).append(
                 Eval(name=row.get("eval_name"), result=label))
-
-        return [FluentTestCase(
-                    name=fact_id,
-                    input=FactID(fact_id=fact_id, fact_name=fact_name, source="okahu"),
-                    evals=evals)
-                for fact_id, evals in evals_by_fact.items()]
+        return by_fact
 
     @staticmethod
     def _iter_eval_report_rows(client, url: str, body: dict):

@@ -1,9 +1,11 @@
-"""Building FluentTestCases from the Okahu /evals/report discovery endpoint.
+"""Building FluentTestCases from the traces recorded for an Okahu workflow.
 
-Discovery mode is selected by the *absence* of fact_ids: the server enumerates
-every fact in the window and returns one row per (fact_id, eval_name). Those rows
-are grouped back into one test case per fact so the generated cases feed straight
-into the testcase= plumbing on with_trace_source / run_agent / check_eval.
+get_trace_ids enumerates the window -- those traces ARE the test cases. Only when
+an eval_name is given is /evals/report asked about exactly those fact_ids, and
+its per-(fact_id, eval_name) rows become each case's expected results. Passing
+fact_ids takes that endpoint out of discovery mode, whose selector was their
+absence. Either way the cases feed straight into the testcase= plumbing on
+with_trace_source / run_agent / check_eval.
 """
 import pytest
 
@@ -68,14 +70,35 @@ def _queue(post, *payloads):
 
 
 WINDOW = {"workflow_name": "wf", "start_time": "2026-05-01", "end_time": "2026-06-30"}
+EVAL = "hallucination"
+
+# The traces get_trace_ids reports for the window. Test cases now come from this
+# list and the eval report only enriches it, so every report-focused test needs
+# some traces to exist. Tests that care about the set override TRACE_IDS[:].
+TRACE_IDS = ["aaa", "bbb", "9ade6084ba144b138090d64d1a082450"]
 
 
+@pytest.fixture(name="stub_traces")
+def stub_traces_fixture(monkeypatch):
+    """Stand in for the trace enumeration that now precedes every report call.
+
+    Explicit rather than autouse: TestTraceIdEnumeration and
+    TestOptionalFactFilter exercise get_trace_ids itself and must not have it
+    stubbed out from under them.
+    """
+    from monocle_test_tools.okahu_span_loader import OkahuSpanLoader
+
+    monkeypatch.setattr(OkahuSpanLoader, "get_trace_ids",
+                        staticmethod(lambda *a, **k: list(TRACE_IDS)))
+
+
+@pytest.mark.usefixtures("stub_traces")
 class TestRequestBody:
 
     def test_posts_to_the_report_path(self, post):
         _queue(post, {"results": []})
 
-        OkahuEval.get_test_cases(**WINDOW)
+        OkahuEval.get_test_cases(**WINDOW, eval_name=EVAL)
 
         assert post["calls"][0]["url"] == (
             "https://api.example/api/v1/workflows/wf/evals/report")
@@ -83,61 +106,63 @@ class TestRequestBody:
     def test_sends_the_api_key(self, post):
         _queue(post, {"results": []})
 
-        OkahuEval.get_test_cases(**WINDOW)
+        OkahuEval.get_test_cases(**WINDOW, eval_name=EVAL)
 
         assert post["calls"][0]["headers"]["x-api-key"] == "test-key"
 
     def test_body_carries_the_required_window(self, post):
         _queue(post, {"results": []})
 
-        OkahuEval.get_test_cases(**WINDOW)
+        OkahuEval.get_test_cases(**WINDOW, eval_name=EVAL)
 
         body = post["calls"][0]["body"]
         assert body["fact_name"] == "traces"
         assert body["start_time"] == "2026-05-01"
         assert body["end_time"] == "2026-06-30"
 
-    def test_omits_fact_ids_to_select_discovery_mode(self, post):
+    def test_sends_the_enumerated_fact_ids(self, post):
+        """fact_ids takes the endpoint OUT of discovery mode: it reports on the
+        traces get_trace_ids already found rather than re-discovering them."""
         _queue(post, {"results": []})
 
-        OkahuEval.get_test_cases(**WINDOW)
+        OkahuEval.get_test_cases(**WINDOW, eval_name=EVAL)
 
-        assert "fact_ids" not in post["calls"][0]["body"]
+        assert post["calls"][0]["body"]["fact_ids"] == TRACE_IDS
 
     def test_category_defaults_to_llm_and_manual(self, post):
         _queue(post, {"results": []})
 
-        OkahuEval.get_test_cases(**WINDOW)
+        OkahuEval.get_test_cases(**WINDOW, eval_name=EVAL)
 
         assert post["calls"][0]["body"]["category"] == ["llm", "manual"]
 
     def test_category_string_is_wrapped(self, post):
         _queue(post, {"results": []})
 
-        OkahuEval.get_test_cases(**WINDOW, category="manual")
+        OkahuEval.get_test_cases(**WINDOW, eval_name=EVAL, category="manual")
 
         assert post["calls"][0]["body"]["category"] == ["manual"]
 
     def test_category_list_passes_through(self, post):
         _queue(post, {"results": []})
 
-        OkahuEval.get_test_cases(**WINDOW, category=["llm", "manual"])
+        OkahuEval.get_test_cases(**WINDOW, eval_name=EVAL, category=["llm", "manual"])
 
         assert post["calls"][0]["body"]["category"] == ["llm", "manual"]
 
     def test_fact_name_is_mapped_to_the_okahu_name(self, post):
         _queue(post, {"results": []})
 
-        OkahuEval.get_test_cases(**WINDOW, fact_name="agentic_turns")
+        OkahuEval.get_test_cases(**WINDOW, eval_name=EVAL, fact_name="agentic_turns")
 
         assert post["calls"][0]["body"]["fact_name"] == "agent_requests"
 
-    def test_eval_names_omitted_when_no_eval_name(self, post):
+    def test_no_report_call_at_all_without_an_eval_name(self, post):
         _queue(post, {"results": []})
 
         OkahuEval.get_test_cases(**WINDOW)
 
-        assert "eval_names" not in post["calls"][0]["body"]
+        assert post["calls"] == []
 
     def test_eval_name_becomes_a_one_item_eval_names(self, post):
         _queue(post, {"results": []})
@@ -153,11 +178,12 @@ class TestRequestBody:
     def test_page_size_is_sent(self, post):
         _queue(post, {"results": []})
 
-        OkahuEval.get_test_cases(**WINDOW, page_size=250)
+        OkahuEval.get_test_cases(**WINDOW, eval_name=EVAL, page_size=250)
 
         assert post["calls"][0]["body"]["page_size"] == 250
 
 
+@pytest.mark.usefixtures("stub_traces")
 class TestPagination:
 
     def test_follows_the_next_page_token(self, post):
@@ -166,7 +192,7 @@ class TestPagination:
                 "next_page_token": "tok-2"},
                {"results": [_row("bbb", "hallucination", "major")]})
 
-        cases = OkahuEval.get_test_cases(**WINDOW)
+        cases = OkahuEval.get_test_cases(**WINDOW, eval_name=EVAL)
 
         assert len(post["calls"]) == 2
         assert post["calls"][1]["body"]["page_token"] == "tok-2"
@@ -175,7 +201,7 @@ class TestPagination:
     def test_stops_when_no_next_page_token(self, post):
         _queue(post, {"results": [_row("aaa", "hallucination", "minor")]})
 
-        OkahuEval.get_test_cases(**WINDOW)
+        OkahuEval.get_test_cases(**WINDOW, eval_name=EVAL)
 
         assert len(post["calls"]) == 1
 
@@ -183,17 +209,18 @@ class TestPagination:
         _queue(post, {"results": [_row("aaa", "hallucination", "minor")],
                       "next_page_token": ""})
 
-        OkahuEval.get_test_cases(**WINDOW)
+        OkahuEval.get_test_cases(**WINDOW, eval_name=EVAL)
 
         assert len(post["calls"]) == 1
 
 
+@pytest.mark.usefixtures("stub_traces")
 class TestMapping:
 
     def test_one_case_per_fact_with_a_factid_input(self, post):
         _queue(post, {"results": [_row("aaa", "hallucination", "minor_hallucination")]})
 
-        cases = OkahuEval.get_test_cases(**WINDOW)
+        cases = OkahuEval.get_test_cases(**WINDOW, eval_name=EVAL)
 
         assert cases == [FluentTestCase(
             name="aaa",
@@ -204,7 +231,7 @@ class TestMapping:
         _queue(post, {"results": [_row("aaa", "hallucination", "minor"),
                                   _row("aaa", "sentiment", "positive")]})
 
-        cases = OkahuEval.get_test_cases(**WINDOW)
+        cases = OkahuEval.get_test_cases(**WINDOW, eval_name=EVAL)
 
         assert len(cases) == 1
         assert cases[0].evals == [Eval(name="hallucination", result="minor"),
@@ -214,14 +241,14 @@ class TestMapping:
         _queue(post, {"results": [_row("aaa", "hallucination", "minor"),
                                   _row("bbb", "hallucination", "major")]})
 
-        cases = OkahuEval.get_test_cases(**WINDOW)
+        cases = OkahuEval.get_test_cases(**WINDOW, eval_name=EVAL)
 
         assert [c.name for c in cases] == ["aaa", "bbb"]
 
     def test_fact_id_is_normalized_to_bare_hex(self, post):
         _queue(post, {"results": [_row("0xaaa", "hallucination", "minor")]})
 
-        cases = OkahuEval.get_test_cases(**WINDOW)
+        cases = OkahuEval.get_test_cases(**WINDOW, eval_name=EVAL)
 
         assert cases[0].input.fact_id == "aaa"
 
@@ -229,14 +256,14 @@ class TestMapping:
         """The body is sent the mapped name; the FactID keeps the caller's."""
         _queue(post, {"results": [_row("aaa", "hallucination", "minor")]})
 
-        cases = OkahuEval.get_test_cases(**WINDOW, fact_name="agentic_turns")
+        cases = OkahuEval.get_test_cases(**WINDOW, eval_name=EVAL, fact_name="agentic_turns")
 
         assert cases[0].input.fact_name == "agentic_turns"
 
     def test_falls_back_to_latest_when_no_authoritative(self, post):
         _queue(post, {"results": [_row("aaa", "hallucination", latest_label="major")]})
 
-        cases = OkahuEval.get_test_cases(**WINDOW)
+        cases = OkahuEval.get_test_cases(**WINDOW, eval_name=EVAL)
 
         assert cases[0].evals == [Eval(name="hallucination", result="major")]
 
@@ -244,7 +271,7 @@ class TestMapping:
         _queue(post, {"results": [_row("aaa", "hallucination", "minor",
                                        latest_label="major")]})
 
-        cases = OkahuEval.get_test_cases(**WINDOW)
+        cases = OkahuEval.get_test_cases(**WINDOW, eval_name=EVAL)
 
         assert cases[0].evals == [Eval(name="hallucination", result="minor")]
 
@@ -252,7 +279,7 @@ class TestMapping:
         _queue(post, {"results": [_row("aaa", "hallucination", "minor"),
                                   _row("aaa", "sentiment")]})
 
-        cases = OkahuEval.get_test_cases(**WINDOW)
+        cases = OkahuEval.get_test_cases(**WINDOW, eval_name=EVAL)
 
         assert cases[0].evals == [Eval(name="hallucination", result="minor")]
 
@@ -260,26 +287,27 @@ class TestMapping:
         """An empty evals list would raise in check_eval -- emit nothing instead."""
         _queue(post, {"results": [_row("aaa", "hallucination")]})
 
-        assert OkahuEval.get_test_cases(**WINDOW) == []
+        assert OkahuEval.get_test_cases(**WINDOW, eval_name=EVAL) == []
 
     def test_eval_not_found_row_is_skipped(self, post):
         _queue(post, {"results": [_row("aaa", "hallucination", "minor",
                                        eval_found=False)]})
 
-        assert OkahuEval.get_test_cases(**WINDOW) == []
+        assert OkahuEval.get_test_cases(**WINDOW, eval_name=EVAL) == []
 
     def test_no_results_gives_no_cases(self, post):
         _queue(post, {"results": []})
 
-        assert OkahuEval.get_test_cases(**WINDOW) == []
+        assert OkahuEval.get_test_cases(**WINDOW, eval_name=EVAL) == []
 
 
+@pytest.mark.usefixtures("stub_traces")
 class TestFluentEntryPoint:
 
     def test_delegates_to_okahu(self, post):
         _queue(post, {"results": [_row("aaa", "hallucination", "minor")]})
 
-        cases = get_test_cases(source="okahu", **WINDOW)
+        cases = get_test_cases(source="okahu", eval_name=EVAL, **WINDOW)
 
         assert [c.name for c in cases] == ["aaa"]
 
@@ -293,7 +321,7 @@ class TestFluentEntryPoint:
     def test_defaults_to_okahu(self, post):
         _queue(post, {"results": []})
 
-        get_test_cases(**WINDOW)
+        get_test_cases(eval_name=EVAL, **WINDOW)
 
         assert post["calls"][0]["url"].endswith("/evals/report")
 
@@ -310,6 +338,7 @@ def test_exported_from_the_package():
     assert monocle_test_tools.get_test_cases is get_test_cases
 
 
+@pytest.mark.usefixtures("stub_traces")
 class TestLiveResponseShape:
     """Pinned against a real /evals/report response captured 2026-08-24.
 
@@ -375,7 +404,7 @@ class TestLiveResponseShape:
     def test_null_next_page_token_stops_paging(self, post):
         _queue(post, self.LIVE_RESPONSE)
 
-        OkahuEval.get_test_cases(**WINDOW)
+        OkahuEval.get_test_cases(**WINDOW, eval_name=EVAL)
 
         assert len(post["calls"]) == 1
 
@@ -384,11 +413,12 @@ class TestLiveResponseShape:
         del row["authoritative"]
         _queue(post, {**self.LIVE_RESPONSE, "results": [row]})
 
-        cases = OkahuEval.get_test_cases(**WINDOW)
+        cases = OkahuEval.get_test_cases(**WINDOW, eval_name=EVAL)
 
         assert cases[0].evals == [Eval(name="user_input_validity", result="valid")]
 
 
+@pytest.mark.usefixtures("stub_traces")
 class TestEmptyEndpointFallsBackToProd:
     """An empty OKAHU_API_ENDPOINT must fall back to prod, not build a hostless URL.
 
@@ -403,7 +433,7 @@ class TestEmptyEndpointFallsBackToProd:
         monkeypatch.setenv("OKAHU_API_ENDPOINT", "")
         _queue(post, {"results": []})
 
-        OkahuEval.get_test_cases(**WINDOW)
+        OkahuEval.get_test_cases(**WINDOW, eval_name=EVAL)
 
         assert post["calls"][0]["url"] == (
             "https://api.okahu.co/api/v1/workflows/wf/evals/report")
@@ -412,7 +442,7 @@ class TestEmptyEndpointFallsBackToProd:
         monkeypatch.delenv("OKAHU_API_ENDPOINT", raising=False)
         _queue(post, {"results": []})
 
-        OkahuEval.get_test_cases(**WINDOW)
+        OkahuEval.get_test_cases(**WINDOW, eval_name=EVAL)
 
         assert post["calls"][0]["url"].startswith("https://api.okahu.co/api/")
 
@@ -420,7 +450,7 @@ class TestEmptyEndpointFallsBackToProd:
         monkeypatch.setenv("OKAHU_API_ENDPOINT", "https://api-stage.okahu.co")
         _queue(post, {"results": []})
 
-        OkahuEval.get_test_cases(**WINDOW)
+        OkahuEval.get_test_cases(**WINDOW, eval_name=EVAL)
 
         assert post["calls"][0]["url"].startswith("https://api-stage.okahu.co/api/")
 
@@ -462,6 +492,7 @@ class TestSpanLoaderEmptyEndpoint:
         assert OkahuSpanLoader._get_api_base() == "https://api-stage.okahu.co"
 
 
+@pytest.mark.usefixtures("stub_traces")
 class TestLocalSource:
     """get_test_cases(source="local", path=...) loads a committed JSON array.
 
@@ -507,7 +538,7 @@ class TestLocalSource:
         """Discover -> dump -> load must produce an equal set of cases."""
         _queue(post, {"results": [_row("aaa", "hallucination", "minor_hallucination"),
                                   _row("bbb", "sentiment", "positive")]})
-        discovered = OkahuEval.get_test_cases(**WINDOW)
+        discovered = OkahuEval.get_test_cases(**WINDOW, eval_name=EVAL)
         path = self._write(tmp_path, [c.model_dump() for c in discovered])
 
         assert get_test_cases(source="local", path=path) == discovered
@@ -554,3 +585,138 @@ class TestLocalSource:
         with pytest.raises(ValueError, match=r"test case 1\b"):
             get_test_cases(source="local", path=path)
 
+
+
+class TestTraceIdEnumeration:
+    """Test cases come from get_trace_ids; the eval report only enriches them.
+
+    Passing fact_ids takes /evals/report out of discovery mode -- the absence of
+    fact_ids is what selected discovery -- so this is a targeted report over the
+    traces the window actually contains.
+    """
+
+    @pytest.fixture(name="traces")
+    def traces_fixture(self, monkeypatch):
+        """Stub get_trace_ids, recording its kwargs."""
+        from monocle_test_tools.okahu_span_loader import OkahuSpanLoader
+
+        seen = {"ids": ["aaa", "bbb"]}
+
+        def fake(workflow_name, fact_name=None, fact_id=None, **kwargs):
+            seen["call"] = {"workflow_name": workflow_name, "fact_name": fact_name,
+                            "fact_id": fact_id, **kwargs}
+            return seen["ids"]
+
+        monkeypatch.setattr(OkahuSpanLoader, "get_trace_ids", staticmethod(fake))
+        return seen
+
+    def test_one_case_per_trace_id_without_eval_name(self, traces, post):
+        cases = OkahuEval.get_test_cases(**WINDOW)
+
+        assert [c.name for c in cases] == ["aaa", "bbb"]
+        assert [c.input.fact_id for c in cases] == ["aaa", "bbb"]
+
+    def test_no_report_call_without_eval_name(self, traces, post):
+        OkahuEval.get_test_cases(**WINDOW)
+
+        assert post["calls"] == []
+
+    def test_cases_without_eval_name_carry_no_evals(self, traces, post):
+        cases = OkahuEval.get_test_cases(**WINDOW)
+
+        assert all(c.evals == [] for c in cases)
+
+    def test_trace_lookup_gets_the_window(self, traces, post):
+        OkahuEval.get_test_cases(**WINDOW)
+
+        assert traces["call"]["start_time"] == "2026-05-01"
+        assert traces["call"]["end_time"] == "2026-06-30"
+
+    def test_trace_lookup_sends_no_fact_filter(self, traces, post):
+        OkahuEval.get_test_cases(**WINDOW)
+
+        assert traces["call"]["fact_name"] is None
+        assert traces["call"]["fact_id"] is None
+
+    def test_report_receives_the_fact_ids(self, traces, post):
+        _queue(post, {"results": [_row("aaa", "hallucination", "minor")]})
+
+        OkahuEval.get_test_cases(**WINDOW, eval_name="hallucination")
+
+        assert post["calls"][0]["body"]["fact_ids"] == ["aaa", "bbb"]
+        assert post["calls"][0]["body"]["eval_names"] == ["hallucination"]
+
+    def test_evals_are_attached_to_their_fact(self, traces, post):
+        _queue(post, {"results": [_row("aaa", "hallucination", "minor"),
+                                  _row("bbb", "hallucination", "major")]})
+
+        cases = OkahuEval.get_test_cases(**WINDOW, eval_name="hallucination")
+
+        assert [(c.name, c.evals[0].result) for c in cases] == [
+            ("aaa", "minor"), ("bbb", "major")]
+
+    def test_a_trace_with_no_labelled_eval_is_dropped(self, traces, post):
+        _queue(post, {"results": [_row("aaa", "hallucination", "minor")]})
+
+        cases = OkahuEval.get_test_cases(**WINDOW, eval_name="hallucination")
+
+        assert [c.name for c in cases] == ["aaa"]
+
+    def test_trace_order_is_preserved(self, traces, post):
+        traces["ids"] = ["ccc", "aaa", "bbb"]
+        _queue(post, {"results": [_row("aaa", "hallucination", "minor"),
+                                  _row("ccc", "hallucination", "minor"),
+                                  _row("bbb", "hallucination", "minor")]})
+
+        cases = OkahuEval.get_test_cases(**WINDOW, eval_name="hallucination")
+
+        assert [c.name for c in cases] == ["ccc", "aaa", "bbb"]
+
+    def test_no_traces_gives_no_cases_and_no_report_call(self, traces, post):
+        traces["ids"] = []
+
+        assert OkahuEval.get_test_cases(**WINDOW, eval_name="hallucination") == []
+        assert post["calls"] == []
+
+
+class TestOptionalFactFilter:
+    """get_trace_ids can now enumerate a window with no fact filter."""
+
+    @pytest.fixture(name="get")
+    def get_fixture(self, monkeypatch):
+        from monocle_test_tools.okahu_span_loader import OkahuSpanLoader
+
+        seen = {}
+
+        def fake_do_get(url, headers, params=None, timeout=30, context_msg=""):
+            seen["params"] = params
+            return []
+
+        monkeypatch.setattr(OkahuSpanLoader, "_do_get", staticmethod(fake_do_get))
+        return seen
+
+    def test_no_fact_filter_omits_both_params(self, get):
+        from monocle_test_tools.okahu_span_loader import OkahuSpanLoader
+
+        OkahuSpanLoader.get_trace_ids("wf", start_time="a", end_time="b")
+
+        assert "duration_fact" not in get["params"]
+        assert "fact_ids" not in get["params"]
+        assert get["params"]["start_time"] == "a"
+
+    def test_a_fact_filter_is_still_sent(self, get):
+        from monocle_test_tools.okahu_span_loader import OkahuSpanLoader
+
+        OkahuSpanLoader.get_trace_ids("wf", "agent_sessions", "sess_1")
+
+        assert get["params"]["duration_fact"] == "agent_sessions"
+        assert get["params"]["fact_ids"] == "sess_1"
+
+    @pytest.mark.parametrize("half", [
+        {"fact_name": "agent_sessions"}, {"fact_id": "sess_1"},
+    ])
+    def test_half_a_filter_raises(self, get, half):
+        from monocle_test_tools.okahu_span_loader import OkahuSpanLoader
+
+        with pytest.raises(ValueError, match="fact_name and fact_id"):
+            OkahuSpanLoader.get_trace_ids("wf", **half)

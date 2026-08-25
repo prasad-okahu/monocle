@@ -134,8 +134,8 @@ class OkahuSpanLoader:
     @staticmethod
     def get_trace_ids(
         workflow_name: str,
-        fact_name: str,
-        fact_id: str,
+        fact_name: Optional[str] = None,
+        fact_id: Optional[str] = None,
         endpoint: Optional[str] = None,
         api_key: Optional[str] = None,
         timeout: int = 30,
@@ -147,28 +147,44 @@ class OkahuSpanLoader:
 
         Uses:  GET /api/v1/workflows/<wf>/traces?duration_fact=<fact_name>&fact_ids=<fact_id>
 
+        With no fact filter the query returns every trace in the workflow (or in
+        the time window, when one is given) -- that is how a test-case set is
+        enumerated. Pass both fact_name and fact_id to narrow to one fact.
+
         Args:
             workflow_name: The workflow / service name registered in Okahu.
-            fact_name: The fact to filter by (e.g. ``agentic_session``).
-            fact_id: The fact value (e.g. a session ID).
+            fact_name: The fact to filter by (e.g. ``agentic_session``). Optional,
+                but only together with fact_id.
+            fact_id: The fact value (e.g. a session ID). Optional, but only
+                together with fact_name.
             endpoint: Okahu API base URL override.
             api_key: Okahu API key override.
             timeout: Request timeout in seconds.
 
         Returns:
             A list of trace ID strings.
+
+        Raises:
+            ValueError: If exactly one of fact_name / fact_id is given. Half a
+                filter is a mistake, not a mode.
         """
+        if (fact_name is None) != (fact_id is None):
+            raise ValueError(
+                "fact_name and fact_id must be given together or not at all; "
+                f"got fact_name={fact_name!r}, fact_id={fact_id!r}")
+
         base = OkahuSpanLoader._get_api_base(endpoint)
         headers = OkahuSpanLoader._get_headers(api_key)
-        params = {
-            "duration_fact": fact_name,
-            "fact_ids": fact_id,
-        }
+        params = {}
+        if fact_name is not None:
+            params["duration_fact"] = fact_name
+            params["fact_ids"] = fact_id
         params.update(OkahuSpanLoader._window_params(start_time, end_time))
 
         data = OkahuSpanLoader._get_resource(
             base, f"{workflow_name}/traces", headers, params=params, timeout=timeout,
-            context_msg=f"traces for {fact_name}='{fact_id}' in workflow '{workflow_name}'"
+            context_msg=(f"traces for {fact_name}='{fact_id}' in workflow '{workflow_name}'"
+                         if fact_name else f"traces in workflow '{workflow_name}'")
         )
 
         trace_list = OkahuSpanLoader._unwrap_list(
