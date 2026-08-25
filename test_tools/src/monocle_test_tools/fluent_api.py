@@ -86,6 +86,10 @@ def get_test_cases(source:str = "okahu", **kwargs) -> list[FluentTestCase]:
     from .evals.okahu_eval import OkahuEval
     return OkahuEval.get_test_cases(**kwargs)
 
+# Fluent methods that select entities, and the kind of entity each selects. A
+# testcase-driven chain may use only one kind, since each builds its own map.
+_SELECTOR_KINDS = {"called_agent": "agent", "called_tool": "tool"}
+
 def collect_assertions(func):
     """
         A decorator to collect assertion errors from fluent API methods. This supresses the AssertionError and collects all the assertions
@@ -123,10 +127,26 @@ def collect_assertions(func):
         testcase_mode = (asserter._testcase_mode if asserter.fluent_chain
                          else testcase_given)
 
+        # One selector kind per testcase chain. Each testcase-driven selector
+        # builds its own entity map, so mixing two is ambiguous. Deliberately
+        # scoped to testcase mode: called_agent("A").called_tool("T") is the
+        # documented narrowing pattern and must keep working.
+        selector = _SELECTOR_KINDS.get(func.__name__)
+        testcase_selector = asserter._testcase_selector
+        if testcase_given and selector is not None:
+            if testcase_selector is not None and testcase_selector != selector:
+                raise ValueError(
+                    f"this chain already selects by {testcase_selector}; "
+                    f"{func.__name__}() selects by {selector}, and a testcase chain "
+                    "may use only one selector kind. Start a new chain.")
+            testcase_selector = selector
+
         asserter = TraceAssertion(filtered_spans=asserter._filtered_spans, fluent_chain=fluent_chain,
                             is_assertion_failed=asserter.is_assertion_failed, _eval=asserter._eval,
                             okahu_filter=getattr(asserter, "_okahu_filter", None),
-                            testcase_mode=testcase_mode)
+                            testcase_mode=testcase_mode,
+                            entity_spans=asserter._entity_spans,
+                            testcase_selector=testcase_selector)
         try:
             func(asserter, *args, **kwargs)
         except AssertionError as e:
@@ -161,6 +181,14 @@ class TraceAssertion():
     # decorated call and threaded per-chain by @collect_assertions; declared here
     # like _okahu_filter so an instance built outside __init__ still reads None.
     _testcase_mode: Optional[bool] = None
+    # Spans of each entity a testcase-driven selector matched, in test-case order,
+    # one pair per DISTINCT name. A list of pairs rather than a dict because Agent
+    # is a pydantic model and therefore unhashable. Threaded per-chain by
+    # @collect_assertions; class-level so an instance built outside __init__ reads None.
+    _entity_spans: Optional[list] = None
+    # Which selector kind opened this testcase chain ("agent" / "tool"). Two
+    # different kinds in one chain would mean two entity maps; see collect_assertions.
+    _testcase_selector: Optional[str] = None
     # Uniform eval report (filter mode = N facts; span mode = 1 fact). Class-scoped
     # like _last_eval so accessors on the fixture's original asserter can read it.
     _eval_report: Optional[dict] = None
@@ -174,7 +202,9 @@ class TraceAssertion():
     def __init__(self, filtered_spans:Optional[list[Span]] = None, fluent_chain:list[str] = []
                 ,is_assertion_failed:bool = False, _eval:Optional[Union[str, BaseEval]] = None,
                 okahu_filter:Optional[dict] = None,
-                testcase_mode:Optional[bool] = None) -> None:
+                testcase_mode:Optional[bool] = None,
+                entity_spans:Optional[list] = None,
+                testcase_selector:Optional[str] = None) -> None:
         self._eval:Union[str, BaseEval]  = _eval
         self.validator = MonocleValidator()
         if filtered_spans is None:
@@ -188,6 +218,9 @@ class TraceAssertion():
         self._okahu_filter = okahu_filter
         # None until the chain's first decorated call decides. See collect_assertions.
         self._testcase_mode = testcase_mode
+        # Populated by a testcase-driven selector; read by the I/O assertions.
+        self._entity_spans = entity_spans
+        self._testcase_selector = testcase_selector
         
     def record_assertion(self, e:AssertionError, fluent_chain:list[str]) -> None:
         """Record an assertion error with its fluent chain context."""
@@ -228,6 +261,8 @@ class TraceAssertion():
         TraceAssertion._assertion_errors = []
         TraceAssertion._last_eval = None
         TraceAssertion._eval_stashes = []
+        TraceAssertion._entity_spans = None
+        TraceAssertion._testcase_selector = None
         TraceAssertion._eval_report = None
 
     @staticmethod
@@ -428,9 +463,23 @@ class TraceAssertion():
         return self
 
     @collect_assertions
-    def called_tool(self, tool_name:str, agent_name:Optional[str] = None, count:Optional[int] = None,
-                    min_count:Optional[int] = None, max_count:Optional[int] = None, message:Optional[str] = None) -> 'TraceAssertion':
-        """Assert tool invocation with optional agent filter and count constraints (count, min_count, max_count)."""
+    def called_tool(self, tool_name:Optional[str] = None, agent_name:Optional[str] = None, count:Optional[int] = None,
+                    min_count:Optional[int] = None, max_count:Optional[int] = None, message:Optional[str] = None,
+                    testcase:Optional[Union[FluentTestCase, dict]] = None) -> 'TraceAssertion':
+        """Assert tool invocation with optional agent filter and count constraints (count, min_count, max_count).
+
+        Args:
+            testcase: Not supported yet -- tool test cases arrive in stage 3.
+                Raises ValueError. The argument exists so that a chain mixing
+                selectors reports the selector rule rather than a TypeError.
+        """
+        if testcase is not None:
+            raise ValueError(
+                "called_tool() does not support testcase= yet; tool test cases arrive "
+                "in stage 3. It accepts the argument now only so that a chain mixing "
+                "selectors reports the selector rule rather than a TypeError.")
+        if tool_name is None:
+            raise ValueError("tool_name is required")
         TraceAssertion._validate_count_params(count, min_count, max_count)
         self._filtered_spans = self.validator._get_tool_invocation_spans(tool_name, agent_name, filtered_spans=self._filtered_spans)
         actual_count = len(self._filtered_spans)
