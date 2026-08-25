@@ -4,7 +4,7 @@ These are pure functions over a ``FluentTestCase`` with no ``TraceAssertion``
 dependency, so they stay testable on their own and are reusable by the span
 selectors when those gain ``testcase=`` support.
 """
-from typing import Any, Sequence, Union
+from typing import Any, Optional, Sequence, Union
 
 from opentelemetry.sdk.trace import ReadableSpan
 
@@ -89,6 +89,30 @@ def factid_import_kwargs(fact_id: FactID) -> dict:
     return kwargs
 
 
+def _input_text(value: Any) -> Optional[str]:
+    """A span's recorded input as one string, or None when it carries no prompt.
+
+    ``data.input`` is a list far more often than a string -- usually the JSON
+    message strings an agent was invoked with, sometimes dicts. A list becomes
+    its elements joined by newlines, each stringified if it is not already text,
+    with empty elements dropped: that reads as a prompt, where str() on the list
+    would yield a Python literal (brackets, single quotes) and json.dumps would
+    double-escape the already-JSON entries.
+
+    Returns None for anything that yields no text, so an empty list is treated
+    as "no input" rather than as the empty string.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value or None
+    if isinstance(value, (list, tuple)):
+        parts = [part if isinstance(part, str) else str(part)
+                 for part in value if part]
+        return "\n".join(parts) or None
+    return str(value) or None
+
+
 def turn_inputs_from_spans(spans: Sequence[ReadableSpan]) -> tuple:
     """The inputs a recorded run was driven with, in call order.
 
@@ -108,7 +132,7 @@ def turn_inputs_from_spans(spans: Sequence[ReadableSpan]) -> tuple:
     ordered = sorted(spans or [], key=lambda span: getattr(span, "start_time", 0) or 0)
 
     inputs = tuple(text for text in
-                   (get_input_from_span(span) for span in ordered
+                   (_input_text(get_input_from_span(span)) for span in ordered
                     if (span.attributes or {}).get("span.type") in TURN_SPAN_TYPES)
                    if text)
     if inputs:
@@ -116,7 +140,7 @@ def turn_inputs_from_spans(spans: Sequence[ReadableSpan]) -> tuple:
 
     for span in ordered:
         if (span.attributes or {}).get("span.type") == SpanType.AGENTIC_INVOCATION.value:
-            text = get_input_from_span(span)
+            text = _input_text(get_input_from_span(span))
             if text:
                 return (text,)
 

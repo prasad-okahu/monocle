@@ -129,3 +129,56 @@ class TestTurnInputsFromSpans:
     def test_no_input_available_raises(self):
         with pytest.raises(ValueError, match="no turn or agent invocation input"):
             turn_inputs_from_spans([])
+
+
+class TestListValuedInput:
+    """A span's data.input is often a list, not a string.
+
+    22 of the 40 data.input events in the sample traces hold a list -- usually
+    the JSON message strings an agent was invoked with. Passing that list
+    through would hand run_agent a list where a prompt belongs.
+    """
+
+    def _span(self, value, span_type="agentic.turn"):
+        from unittest.mock import MagicMock
+        event = MagicMock()
+        event.name = "data.input"
+        event.attributes = {"input": value}
+        span = MagicMock()
+        span.attributes = {"span.type": span_type}
+        span.events = [event]
+        span.start_time = 1
+        return span
+
+    def test_list_of_strings_joins_with_newlines(self):
+        spans = [self._span(['{"system": "You are..."}', '{"user": "Book a flight"}'])]
+
+        assert turn_inputs_from_spans(spans) == (
+            '{"system": "You are..."}\n{"user": "Book a flight"}',)
+
+    def test_list_of_dicts_is_stringified_per_element(self):
+        spans = [self._span([{"role": "user", "content": "Book a flight"}])]
+
+        assert turn_inputs_from_spans(spans) == (
+            "{'role': 'user', 'content': 'Book a flight'}",)
+
+    def test_a_plain_string_is_untouched(self):
+        spans = [self._span("Book a flight")]
+
+        assert turn_inputs_from_spans(spans) == ("Book a flight",)
+
+    def test_an_empty_list_is_not_an_input(self):
+        """[] carries no prompt, so it must not become the empty string."""
+        with pytest.raises(ValueError, match="no turn or agent invocation input"):
+            turn_inputs_from_spans([self._span([])])
+
+    def test_empty_elements_are_dropped(self):
+        spans = [self._span(["", "Book a flight", None])]
+
+        assert turn_inputs_from_spans(spans) == ("Book a flight",)
+
+    def test_the_agent_invocation_fallback_converts_too(self):
+        spans = [self._span(['{"user": "Book a flight"}'],
+                            span_type="agentic.invocation")]
+
+        assert turn_inputs_from_spans(spans) == ('{"user": "Book a flight"}',)
