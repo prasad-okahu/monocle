@@ -11,7 +11,7 @@ from monocle_test_tools.constants import CUSTOM_EVAL_TYPE
 from monocle_test_tools.evals.okahu_filtered_eval import build_filtered_report
 from monocle_test_tools.schema import Evaluation, FactID
 from monocle_test_tools.span_loader import JSONSpanLoader, OkahuSpanLoader
-from monocle_test_tools.testcase import FluentTestCase
+from monocle_test_tools.testcase import Agent, FluentTestCase
 from monocle_test_tools.testcase_args import (factid_import_kwargs, resolve_testcase,
                                               turn_inputs_from_spans)
 from .comparer.comparer_manager import get_comparer
@@ -508,9 +508,22 @@ class TraceAssertion():
         return self
 
     @collect_assertions
-    def called_agent(self, agent_name:str, count:Optional[int] = None, min_count:Optional[int] = None, 
-                     max_count:Optional[int] = None, message:Optional[str] = None) -> 'TraceAssertion':
-        """Assert agent invocation with optional count constraints (count, min_count, max_count)."""
+    def called_agent(self, agent_name:Optional[str] = None, count:Optional[int] = None, min_count:Optional[int] = None, 
+                     max_count:Optional[int] = None, message:Optional[str] = None,
+                     testcase:Optional[Union[FluentTestCase, dict]] = None) -> 'TraceAssertion':
+        """Assert agent invocation with optional count constraints (count, min_count, max_count).
+
+        Args:
+            testcase: Assert every agent the test case names instead of one, and
+                record each one's spans for the input/output checks that follow.
+                Cannot be combined with agent_name/count/min_count/max_count.
+        """
+        if testcase is not None:
+            return self._called_agent_testcase(
+                testcase, agent_name=agent_name, count=count,
+                min_count=min_count, max_count=max_count, message=message)
+        if agent_name is None:
+            raise ValueError("agent_name is required without a testcase")
         TraceAssertion._validate_count_params(count, min_count, max_count)
         self._filtered_spans = self.validator._get_agent_invocation_spans(agent_name, filtered_spans=self._filtered_spans)
         actual_count = len(self._filtered_spans)
@@ -525,6 +538,53 @@ class TraceAssertion():
         else:
             TraceAssertion._assert_on_spans(self._filtered_spans, f"Agent '{agent_name}' was not called", custom_message=message)
         return self
+
+    def _called_agent_testcase(self, testcase, *, agent_name, count, min_count,
+                              max_count, message) -> 'TraceAssertion':
+        """Resolve every agent a test case names into the entity-span map.
+
+        One entry per DISTINCT name: from_spans keeps same-name agents with
+        different input/output as separate entries, so a discovered test case
+        routinely names one agent twice. Both entries describe one agent whose
+        spans are one set, so the map holds it once and the per-entry
+        expectations are checked against that shared list by the I/O assertions.
+
+        Every missing agent is reported in a single AssertionError, because
+        record_assertion keeps only the first failure of a chain.
+        """
+        testcase = resolve_testcase(testcase, agent_name=agent_name, count=count,
+                                    min_count=min_count, max_count=max_count)
+        if not testcase.agents:
+            raise ValueError(
+                f"testcase '{testcase.name}' names no agents to select; a selector "
+                "with nothing to select must not read as a passing test")
+
+        entity_spans, missing, matched = [], [], []
+        for name in dict.fromkeys(agent.name for agent in testcase.agents):
+            spans = self.validator._get_agent_invocation_spans(
+                name, filtered_spans=self._filtered_spans)
+            if spans:
+                entity_spans.append((Agent(name=name), spans))
+                matched.extend(spans)
+            else:
+                missing.append(name)
+
+        self._entity_spans = entity_spans
+        self._filtered_spans = matched
+
+        if missing:
+            raise AssertionError(message or (
+                f"{len(missing)} of {len(missing) + len(entity_spans)} agents named by "
+                f"testcase '{testcase.name}' were not called: " + ", ".join(
+                    f"'{name}'" for name in missing)))
+        return self
+
+    def _entity_span_list(self, name:str) -> Optional[list]:
+        """Spans matched for `name`, or None when the selector did not match it."""
+        for entity, spans in self._entity_spans or []:
+            if entity.name == name:
+                return spans
+        return None
 
     @collect_assertions
     def does_not_call_agent(self, agent_name:str, message:Optional[str] = None) -> 'TraceAssertion':
