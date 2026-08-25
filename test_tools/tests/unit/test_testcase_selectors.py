@@ -97,11 +97,14 @@ class TestStateThreading:
         assert TraceAssertion()._entity_spans is None
 
     def test_entity_spans_is_carried_down_a_chain(self, asserter):
-        scope = asserter.called_agent(testcase=TESTCASE)
+        # An output is needed: a check where no agent sets the field raises
+        # rather than passing vacuously, which would mask the threading.
+        testcase = {"agents": {AGENT: {"output": "OK. Here's a summary"}}}
+        scope = asserter.called_agent(testcase=testcase)
         _drain()
 
         assert scope._entity_spans is not None
-        assert scope.contains_output(testcase=TESTCASE)._entity_spans is scope._entity_spans
+        assert scope.contains_output(testcase=testcase)._entity_spans is scope._entity_spans
 
     def test_cleanup_clears_entity_spans(self):
         TraceAssertion._entity_spans = [("stale", [])]

@@ -203,6 +203,7 @@ class TraceAssertion():
                 ,is_assertion_failed:bool = False, _eval:Optional[Union[str, BaseEval]] = None,
                 okahu_filter:Optional[dict] = None,
                 testcase_mode:Optional[bool] = None,
+                *,
                 entity_spans:Optional[list] = None,
                 testcase_selector:Optional[str] = None) -> None:
         self._eval:Union[str, BaseEval]  = _eval
@@ -465,6 +466,7 @@ class TraceAssertion():
     @collect_assertions
     def called_tool(self, tool_name:Optional[str] = None, agent_name:Optional[str] = None, count:Optional[int] = None,
                     min_count:Optional[int] = None, max_count:Optional[int] = None, message:Optional[str] = None,
+                    *,
                     testcase:Optional[Union[FluentTestCase, dict]] = None) -> 'TraceAssertion':
         """Assert tool invocation with optional agent filter and count constraints (count, min_count, max_count).
 
@@ -510,6 +512,7 @@ class TraceAssertion():
     @collect_assertions
     def called_agent(self, agent_name:Optional[str] = None, count:Optional[int] = None, min_count:Optional[int] = None, 
                      max_count:Optional[int] = None, message:Optional[str] = None,
+                     *,
                      testcase:Optional[Union[FluentTestCase, dict]] = None) -> 'TraceAssertion':
         """Assert agent invocation with optional count constraints (count, min_count, max_count).
 
@@ -796,15 +799,29 @@ class TraceAssertion():
         return self._filter_spans_where(spans, None, event_spec, None)
 
     @collect_assertions
-    def has_input(self, expected_input:str, message:Optional[str] = None) -> 'TraceAssertion':
+    def has_input(self, expected_input:Optional[str] = None, message:Optional[str] = None,
+                       *,
+                       testcase:Optional[Union[FluentTestCase, dict]] = None) -> 'TraceAssertion':
         """Assert that the input matches the expected input."""
+        if testcase is not None:
+            resolve_testcase(testcase, expected_input=expected_input)
+            self._verify_io_testcase(testcase, field="input", comparer=self._comparer,
+                                     positive_test=True, message=message)
+            return self
+        if expected_input is None:
+            raise ValueError("expected_input is required without a testcase")
         self._verify_input_output(self._filtered_spans, expected_inputs=[expected_input],
                                     expected_outputs=[], comparer=self._comparer, eval=self._eval, custom_message=message)
         return self
 
     @collect_assertions
-    def has_any_input(self, *expected_inputs:str, message:Optional[str] = None) -> 'TraceAssertion':
+    def has_any_input(self, *expected_inputs:str, message:Optional[str] = None, testcase:Optional[Union[FluentTestCase, dict]] = None) -> 'TraceAssertion':
         """Assert that any of the expected inputs match."""
+        if testcase is not None:
+            raise ValueError(
+                "this method does not support 'testcase'; it takes any-of values, "
+                "and an agent records exactly one input and one output. Use the "
+                "singular form (e.g. contains_output) with a testcase.")
         if not expected_inputs:
             raise ValueError("At least one expected_input is required")
         self._verify_input_output(self._filtered_spans, expected_inputs=list(expected_inputs),
@@ -812,15 +829,29 @@ class TraceAssertion():
         return self
 
     @collect_assertions
-    def does_not_have_input(self, unexpected_input:str, message:Optional[str] = None) -> 'TraceAssertion':
+    def does_not_have_input(self, unexpected_input:Optional[str] = None, message:Optional[str] = None,
+                                 *,
+                                 testcase:Optional[Union[FluentTestCase, dict]] = None) -> 'TraceAssertion':
         """Assert that the input does not match the unexpected input."""
+        if testcase is not None:
+            resolve_testcase(testcase, unexpected_input=unexpected_input)
+            self._verify_io_testcase(testcase, field="input", comparer=self._comparer,
+                                     positive_test=False, message=message)
+            return self
+        if unexpected_input is None:
+            raise ValueError("unexpected_input is required without a testcase")
         self._verify_input_output(self._filtered_spans, expected_inputs=[unexpected_input],
                                     expected_outputs=[], comparer=self._comparer, eval=self._eval, positive_test=False, custom_message=message)
         return self
 
     @collect_assertions
-    def does_not_have_any_input(self, *unexpected_inputs:str, message:Optional[str] = None) -> 'TraceAssertion':
+    def does_not_have_any_input(self, *unexpected_inputs:str, message:Optional[str] = None, testcase:Optional[Union[FluentTestCase, dict]] = None) -> 'TraceAssertion':
         """Assert that none of the unexpected inputs match."""
+        if testcase is not None:
+            raise ValueError(
+                "this method does not support 'testcase'; it takes any-of values, "
+                "and an agent records exactly one input and one output. Use the "
+                "singular form (e.g. contains_output) with a testcase.")
         if not unexpected_inputs:
             raise ValueError("At least one unexpected_input is required")
         self._verify_input_output(self._filtered_spans, expected_inputs=list(unexpected_inputs),
@@ -828,15 +859,29 @@ class TraceAssertion():
         return self
 
     @collect_assertions
-    def contains_input(self, expected_input_substring:str, message:Optional[str] = None) -> 'TraceAssertion':
+    def contains_input(self, expected_input_substring:Optional[str] = None, message:Optional[str] = None,
+                            *,
+                            testcase:Optional[Union[FluentTestCase, dict]] = None) -> 'TraceAssertion':
         """Assert that the input contains the expected substring"""
+        if testcase is not None:
+            resolve_testcase(testcase, expected_input_substring=expected_input_substring)
+            self._verify_io_testcase(testcase, field="input", comparer=TokenMatchComparer(),
+                                     positive_test=True, message=message)
+            return self
+        if expected_input_substring is None:
+            raise ValueError("expected_input_substring is required without a testcase")
         self._verify_input_output(self._filtered_spans, expected_inputs=[expected_input_substring],
                                     expected_outputs=[], comparer=TokenMatchComparer(), eval=self._eval, custom_message=message)
         return self
 
     @collect_assertions
-    def contains_any_input(self, *expected_input_substrings:str, message:Optional[str] = None) -> 'TraceAssertion':
+    def contains_any_input(self, *expected_input_substrings:str, message:Optional[str] = None, testcase:Optional[Union[FluentTestCase, dict]] = None) -> 'TraceAssertion':
         """Assert that any input contains the expected substring"""
+        if testcase is not None:
+            raise ValueError(
+                "this method does not support 'testcase'; it takes any-of values, "
+                "and an agent records exactly one input and one output. Use the "
+                "singular form (e.g. contains_output) with a testcase.")
         if not expected_input_substrings:
             raise ValueError("At least one expected_input_substring is required")
         self._verify_input_output(self._filtered_spans, expected_inputs=list(expected_input_substrings),
@@ -844,15 +889,29 @@ class TraceAssertion():
         return self
 
     @collect_assertions
-    def does_not_contain_input(self, unexpected_input_substring:str, message:Optional[str] = None) -> 'TraceAssertion':
+    def does_not_contain_input(self, unexpected_input_substring:Optional[str] = None, message:Optional[str] = None,
+                                    *,
+                                    testcase:Optional[Union[FluentTestCase, dict]] = None) -> 'TraceAssertion':
         """Assert that the input does not contain the given substring"""
+        if testcase is not None:
+            resolve_testcase(testcase, unexpected_input_substring=unexpected_input_substring)
+            self._verify_io_testcase(testcase, field="input", comparer=TokenMatchComparer(),
+                                     positive_test=False, message=message)
+            return self
+        if unexpected_input_substring is None:
+            raise ValueError("unexpected_input_substring is required without a testcase")
         self._verify_input_output(self._filtered_spans, expected_inputs=[unexpected_input_substring],
                                     expected_outputs=[], comparer=TokenMatchComparer(), eval=self._eval, positive_test=False, custom_message=message)
         return self
 
     @collect_assertions
-    def does_not_contain_any_input(self, *unexpected_input_substrings:str, message:Optional[str] = None) -> 'TraceAssertion':
+    def does_not_contain_any_input(self, *unexpected_input_substrings:str, message:Optional[str] = None, testcase:Optional[Union[FluentTestCase, dict]] = None) -> 'TraceAssertion':
         """Assert that no input contains the given substrings"""
+        if testcase is not None:
+            raise ValueError(
+                "this method does not support 'testcase'; it takes any-of values, "
+                "and an agent records exactly one input and one output. Use the "
+                "singular form (e.g. contains_output) with a testcase.")
         if not unexpected_input_substrings:
             raise ValueError("At least one unexpected_input_substring is required")
         self._verify_input_output(self._filtered_spans, expected_inputs=list(unexpected_input_substrings),
@@ -860,15 +919,29 @@ class TraceAssertion():
         return self
 
     @collect_assertions
-    def has_output(self, expected_output:str, message:Optional[str] = None) -> 'TraceAssertion':
+    def has_output(self, expected_output:Optional[str] = None, message:Optional[str] = None,
+                        *,
+                        testcase:Optional[Union[FluentTestCase, dict]] = None) -> 'TraceAssertion':
         """Assert that the output matches the expected output."""
+        if testcase is not None:
+            resolve_testcase(testcase, expected_output=expected_output)
+            self._verify_io_testcase(testcase, field="output", comparer=self._comparer,
+                                     positive_test=True, message=message)
+            return self
+        if expected_output is None:
+            raise ValueError("expected_output is required without a testcase")
         self._verify_input_output(self._filtered_spans, expected_inputs=[], expected_outputs=[expected_output],
                                  comparer=self._comparer, eval=self._eval, custom_message=message)
         return self
 
     @collect_assertions
-    def has_any_output(self, *expected_outputs:str, message:Optional[str] = None) -> 'TraceAssertion':
+    def has_any_output(self, *expected_outputs:str, message:Optional[str] = None, testcase:Optional[Union[FluentTestCase, dict]] = None) -> 'TraceAssertion':
         """Assert that the output matches any of the expected outputs."""
+        if testcase is not None:
+            raise ValueError(
+                "this method does not support 'testcase'; it takes any-of values, "
+                "and an agent records exactly one input and one output. Use the "
+                "singular form (e.g. contains_output) with a testcase.")
         if not expected_outputs:
             raise ValueError("At least one expected_output is required")
         self._verify_input_output(self._filtered_spans, expected_inputs=[],
@@ -876,15 +949,29 @@ class TraceAssertion():
         return self
 
     @collect_assertions
-    def does_not_have_output(self, unexpected_output:str, message:Optional[str] = None) -> 'TraceAssertion':
+    def does_not_have_output(self, unexpected_output:Optional[str] = None, message:Optional[str] = None,
+                                  *,
+                                  testcase:Optional[Union[FluentTestCase, dict]] = None) -> 'TraceAssertion':
         """Assert that the output does not have the given output."""
+        if testcase is not None:
+            resolve_testcase(testcase, unexpected_output=unexpected_output)
+            self._verify_io_testcase(testcase, field="output", comparer=self._comparer,
+                                     positive_test=False, message=message)
+            return self
+        if unexpected_output is None:
+            raise ValueError("unexpected_output is required without a testcase")
         self._verify_input_output(self._filtered_spans, expected_inputs=[] , expected_outputs=[unexpected_output],
                                  comparer=self._comparer, eval=self._eval, positive_test=False, custom_message=message)
         return self
 
     @collect_assertions
-    def does_not_have_any_output(self, *unexpected_outputs:str, message:Optional[str] = None) -> 'TraceAssertion':
+    def does_not_have_any_output(self, *unexpected_outputs:str, message:Optional[str] = None, testcase:Optional[Union[FluentTestCase, dict]] = None) -> 'TraceAssertion':
         """Assert that the output does not have any of the given outputs."""
+        if testcase is not None:
+            raise ValueError(
+                "this method does not support 'testcase'; it takes any-of values, "
+                "and an agent records exactly one input and one output. Use the "
+                "singular form (e.g. contains_output) with a testcase.")
         if not unexpected_outputs:
             raise ValueError("At least one unexpected_output is required")
         self._verify_input_output(self._filtered_spans, expected_inputs=[],
@@ -892,15 +979,29 @@ class TraceAssertion():
         return self
 
     @collect_assertions
-    def contains_output(self, expected_output_substring:str, message:Optional[str] = None) -> 'TraceAssertion':
+    def contains_output(self, expected_output_substring:Optional[str] = None, message:Optional[str] = None,
+                             *,
+                             testcase:Optional[Union[FluentTestCase, dict]] = None) -> 'TraceAssertion':
         """Assert that the output contains the expected substring."""
+        if testcase is not None:
+            resolve_testcase(testcase, expected_output_substring=expected_output_substring)
+            self._verify_io_testcase(testcase, field="output", comparer=TokenMatchComparer(),
+                                     positive_test=True, message=message)
+            return self
+        if expected_output_substring is None:
+            raise ValueError("expected_output_substring is required without a testcase")
         self._verify_input_output(self._filtered_spans, expected_inputs=[],
                                 expected_outputs=[expected_output_substring], comparer=TokenMatchComparer(), eval=self._eval, custom_message=message)
         return self
 
     @collect_assertions
-    def contains_any_output(self, *expected_output_substrings:str, message:Optional[str] = None) -> 'TraceAssertion':
+    def contains_any_output(self, *expected_output_substrings:str, message:Optional[str] = None, testcase:Optional[Union[FluentTestCase, dict]] = None) -> 'TraceAssertion':
         """Assert that any output contains the expected substring."""
+        if testcase is not None:
+            raise ValueError(
+                "this method does not support 'testcase'; it takes any-of values, "
+                "and an agent records exactly one input and one output. Use the "
+                "singular form (e.g. contains_output) with a testcase.")
         if not expected_output_substrings:
             raise ValueError("At least one expected_output_substring is required")
         self._verify_input_output(self._filtered_spans, expected_inputs=[],
@@ -908,16 +1009,30 @@ class TraceAssertion():
         return self
 
     @collect_assertions
-    def does_not_contain_output(self, unexpected_output_substring:str, message:Optional[str] = None) -> 'TraceAssertion':
+    def does_not_contain_output(self, unexpected_output_substring:Optional[str] = None, message:Optional[str] = None,
+                                     *,
+                                     testcase:Optional[Union[FluentTestCase, dict]] = None) -> 'TraceAssertion':
         """Assert that the output does not contain the given substring."""
+        if testcase is not None:
+            resolve_testcase(testcase, unexpected_output_substring=unexpected_output_substring)
+            self._verify_io_testcase(testcase, field="output", comparer=TokenMatchComparer(),
+                                     positive_test=False, message=message)
+            return self
+        if unexpected_output_substring is None:
+            raise ValueError("unexpected_output_substring is required without a testcase")
         self._verify_input_output(self._filtered_spans, expected_inputs=[],
                                 expected_outputs=[unexpected_output_substring], comparer=TokenMatchComparer(), eval=self._eval,
                                 positive_test=False, custom_message=message)
         return self
 
     @collect_assertions
-    def does_not_contain_any_output(self, *unexpected_output_substrings:str, message:Optional[str] = None) -> 'TraceAssertion':
+    def does_not_contain_any_output(self, *unexpected_output_substrings:str, message:Optional[str] = None, testcase:Optional[Union[FluentTestCase, dict]] = None) -> 'TraceAssertion':
         """Assert that no output contains the given substrings."""
+        if testcase is not None:
+            raise ValueError(
+                "this method does not support 'testcase'; it takes any-of values, "
+                "and an agent records exactly one input and one output. Use the "
+                "singular form (e.g. contains_output) with a testcase.")
         if not unexpected_output_substrings:
             raise ValueError("At least one unexpected_output_substring is required")
         self._verify_input_output(self._filtered_spans, expected_inputs=[],
@@ -1388,6 +1503,60 @@ class TraceAssertion():
     def load_spans(self, spans:list[Span]) -> None:
         """Load spans into the validator's memory exporter for assertions."""
         self.validator.add_remote_spans(spans)
+
+    def _verify_io_testcase(self, testcase, *, field:str, comparer:BaseComparer,
+                            positive_test:bool, message:Optional[str]) -> None:
+        """Check each test-case agent's own `field` against that agent's spans.
+
+        Walks EVERY entry in tc.agents, duplicates included, and looks its spans
+        up by name -- so two entries for one agent run two checks against one
+        span list. That is what a single queue per agent name means: the
+        expectations are per entry, the spans are per name.
+
+        Uses validator._check_input_output, which returns the matching spans
+        rather than raising, so failures can be accumulated. All of them are
+        raised together because record_assertion keeps only the first per chain.
+        """
+        testcase = resolve_testcase(testcase)
+        if self._entity_spans is None:
+            raise ValueError(
+                "no agents selected; chain called_agent(testcase=...) before an "
+                "input/output check that takes a testcase.")
+
+        checked, failures = 0, []
+        for agent in testcase.agents or []:
+            expected = getattr(agent, field)
+            if expected is None:
+                continue
+            spans = self._entity_span_list(agent.name)
+            if spans is None:
+                # called_agent already reported this agent as not called; saying
+                # so again in every I/O check would bury the real failures.
+                continue
+            checked += 1
+            if field == "input":
+                io_kwargs = {"expected_inputs": [expected], "expected_outputs": []}
+            else:
+                io_kwargs = {"expected_inputs": [], "expected_outputs": [expected]}
+            matched = self.validator._check_input_output(
+                spans, comparer=comparer, eval=self._eval,
+                positive_test=positive_test, **io_kwargs)
+            if positive_test and not matched:
+                failures.append(
+                    f"agent '{agent.name}' has no {field} matching {expected!r}")
+            elif not positive_test and matched:
+                failures.append(
+                    f"agent '{agent.name}' has a {field} matching {expected!r}, "
+                    "which was not expected")
+
+        if checked == 0:
+            raise ValueError(
+                f"no agent in testcase '{testcase.name}' sets an {field}; a check "
+                "with nothing to assert must not read as a passing test")
+        if failures:
+            raise AssertionError(message or (
+                f"{len(failures)} of {checked} agent {field} checks failed:"
+                + "".join(f"{os.linesep}  - {failure}" for failure in failures)))
 
     def _verify_input_output(self, spans:list[Span], expected_inputs:Optional[list[str]], expected_outputs:Optional[list[str]],
                         comparer:BaseComparer, eval:Optional[Evaluation], positive_test:Optional[bool]=True,
