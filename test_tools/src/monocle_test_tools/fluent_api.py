@@ -1513,6 +1513,11 @@ class TraceAssertion():
         span list. That is what a single queue per agent name means: the
         expectations are per entry, the spans are per name.
 
+        An entry that sets no value for `field` -- unset or empty -- states no
+        expectation, so it is skipped. A call where *no* entry sets one asserts
+        nothing and passes quietly: a test case describes what it knows, and a
+        check it says nothing about is not a failure of that check.
+
         Uses validator._check_input_output, which returns the matching spans
         rather than raising, so failures can be accumulated. All of them are
         raised together because record_assertion keeps only the first per chain.
@@ -1526,7 +1531,10 @@ class TraceAssertion():
         checked, failures = 0, []
         for agent in testcase.agents or []:
             expected = getattr(agent, field)
-            if expected is None:
+            if not expected:
+                # Unset or empty: the test case states no expectation for this
+                # agent's input/output, so there is nothing to check. Covers ""
+                # as well as None -- an empty string asserts nothing either.
                 continue
             spans = self._entity_span_list(agent.name)
             if spans is None:
@@ -1549,10 +1557,6 @@ class TraceAssertion():
                     f"agent '{agent.name}' has a {field} matching {expected!r}, "
                     "which was not expected")
 
-        if checked == 0:
-            raise ValueError(
-                f"no agent in testcase '{testcase.name}' sets an {field}; a check "
-                "with nothing to assert must not read as a passing test")
         if failures:
             raise AssertionError(message or (
                 f"{len(failures)} of {checked} agent {field} checks failed:"

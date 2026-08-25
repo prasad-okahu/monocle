@@ -91,11 +91,31 @@ class TestContainsOutput:
 
         assert _drain() == []
 
-    def test_all_outputs_unset_raises(self, asserter):
+    def test_all_outputs_unset_is_ignored(self, asserter):
+        """A test case that states no output expectation fails no output check."""
         tc = {"agents": {SUPERVISOR: {}, HOTEL: {}}}
 
-        with pytest.raises(ValueError, match="no agent"):
-            _select(asserter, tc).contains_output(testcase=tc)
+        _select(asserter, tc).contains_output(testcase=tc)
+
+        assert _drain() == []
+
+    def test_an_empty_output_is_ignored(self, asserter):
+        """"" states no expectation either, so it must not be checked as a value."""
+        tc = {"agents": {SUPERVISOR: {"output": ""}}}
+
+        _select(asserter, tc).contains_output(testcase=tc)
+
+        assert _drain() == []
+
+    def test_an_unset_output_does_not_mask_a_set_one(self, asserter):
+        """Skipping the silent entries must not skip the real check."""
+        tc = {"agents": {SUPERVISOR: {"output": "definitely not present"}, HOTEL: {}}}
+
+        _select(asserter, tc).contains_output(testcase=tc)
+
+        messages = _drain()
+        assert len(messages) == 1
+        assert SUPERVISOR in messages[0]
 
     def test_an_agent_missing_from_the_map_is_skipped(self, asserter):
         """It already failed in called_agent; do not report it again here."""
