@@ -20,12 +20,20 @@ def _okahu_env(monkeypatch):
 
 
 def _row(fact_id, eval_name, label=None, latest_label=None, eval_found=True):
-    """One /evals/report result row, per (fact_id, eval_name)."""
+    """One /evals/report result row, per (fact_id, eval_name).
+
+    ``authoritative`` and each ``latest`` entry are run envelopes; the label sits
+    inside their ``eval_result``. See TestLiveResponseShape for the captured shape.
+    """
     row = {"fact_id": fact_id, "eval_name": eval_name, "eval_found": eval_found}
     if label is not None:
-        row["authoritative"] = {"label": label, "explanation": "because"}
+        row["authoritative"] = {
+            "eval_result": {"label": label, "explanation": "because"},
+            "eval_timestamp": "2026-08-13T17:01:37.646594Z", "category": "llm"}
     if latest_label is not None:
-        row["latest"] = [{"label": latest_label, "explanation": "newest"}]
+        row["latest"] = [{
+            "eval_result": {"label": latest_label, "explanation": "newest"},
+            "eval_timestamp": "2026-08-13T17:01:37.646594Z", "category": "llm"}]
     return row
 
 
@@ -299,3 +307,82 @@ def test_exported_from_the_package():
     import monocle_test_tools
 
     assert monocle_test_tools.get_test_cases is get_test_cases
+
+
+class TestLiveResponseShape:
+    """Pinned against a real /evals/report response captured 2026-08-24.
+
+    The label lives at authoritative.eval_result.label -- one level deeper than
+    the row. An earlier version read authoritative.label, which silently matched
+    nothing and returned zero test cases for every real response.
+    """
+
+    LIVE_RESPONSE = {
+        "app_name": "adk-travel-agent_vtykgu",
+        "eval_names": ["user_input_validity"],
+        "fact_name": "traces",
+        "category": ["llm", "manual"],
+        "results": [
+            {
+                "fact_id": "9ade6084ba144b138090d64d1a082450",
+                "eval_id": "custom_evaluation__generic__user_input_validity",
+                "eval_name": "user_input_validity",
+                "eval_found": True,
+                "authoritative": {
+                    "eval_result": {
+                        "template_name": "user_input_validity",
+                        "label": "valid",
+                        "explanation": "The user's input is a request to book a flight...",
+                        "category": "manual",
+                    },
+                    "eval_timestamp": "2026-08-13T17:01:37.646594Z",
+                    "category": "manual",
+                    "finish_type": "success",
+                },
+                "latest": [
+                    {
+                        "eval_result": {"template_name": "user_input_validity",
+                                        "label": "valid", "category": "manual"},
+                        "eval_timestamp": "2026-08-13T17:01:37.646594Z",
+                        "category": "manual",
+                    },
+                    {
+                        "eval_result": {"label": "valid", "category": "Travel booking"},
+                        "eval_timestamp": "2026-08-05T04:41:38.636182Z",
+                        "category": "llm",
+                    },
+                ],
+                "summary": {"eval_count": 2, "enum_counts": {"valid": 2}},
+            }
+        ],
+        "next_page_token": None,
+        "prev_page_token": None,
+    }
+
+    def test_live_response_yields_one_case(self, post):
+        _queue(post, self.LIVE_RESPONSE)
+
+        cases = OkahuEval.get_test_cases(**WINDOW, category=["manual", "llm"],
+                                         eval_name="user_input_validity")
+
+        assert cases == [FluentTestCase(
+            name="9ade6084ba144b138090d64d1a082450",
+            input=FactID(fact_id="9ade6084ba144b138090d64d1a082450",
+                         fact_name="traces", source="okahu"),
+            evals=[Eval(name="user_input_validity", result="valid")])]
+
+    def test_null_next_page_token_stops_paging(self, post):
+        _queue(post, self.LIVE_RESPONSE)
+
+        OkahuEval.get_test_cases(**WINDOW)
+
+        assert len(post["calls"]) == 1
+
+    def test_latest_fallback_also_reads_eval_result(self, post):
+        row = {**self.LIVE_RESPONSE["results"][0]}
+        del row["authoritative"]
+        _queue(post, {**self.LIVE_RESPONSE, "results": [row]})
+
+        cases = OkahuEval.get_test_cases(**WINDOW)
+
+        assert cases[0].evals == [Eval(name="user_input_validity", result="valid")]

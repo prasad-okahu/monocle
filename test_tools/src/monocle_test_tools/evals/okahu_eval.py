@@ -193,16 +193,23 @@ class OkahuEval(BaseEval):
     def _report_row_label(row: dict) -> Optional[str]:
         """The settled label of one /evals/report row, or None when it has none.
 
-        ``authoritative`` is the row's decided result; ``latest`` holds recent runs
-        newest-first and is the fallback for a row not yet settled.
+        ``authoritative`` is the row's decided run; ``latest`` holds recent runs
+        newest-first and is the fallback for a row with no authoritative pick. Both
+        are *run* envelopes (eval_timestamp, job_id, category, ...) that carry the
+        label one level down in ``eval_result`` -- reading ``label`` off the
+        envelope itself matches nothing and silently yields no test cases.
         """
         if not row or not row.get("eval_found"):
             return None
-        label = (row.get("authoritative") or {}).get("label")
+
+        def _label(run):
+            return ((run or {}).get("eval_result") or {}).get("label")
+
+        label = _label(row.get("authoritative"))
         if label:
             return label
         latest = row.get("latest") or []
-        return (latest[0] or {}).get("label") if latest else None
+        return _label(latest[0]) if latest else None
 
     @staticmethod
     def _map_fact_name(fact_name: str) -> str:
