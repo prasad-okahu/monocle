@@ -97,6 +97,20 @@ class OkahuSpanLoader:
             ) from exc
 
     @staticmethod
+    def _window_params(start_time: Optional[str], end_time: Optional[str]) -> dict:
+        """The time-window query params, omitting whichever end was not given.
+
+        Returned as a dict to merge so that a call with no window leaves `params`
+        exactly as it was -- callers rely on an empty params becoming None.
+        """
+        window = {}
+        if start_time is not None:
+            window["start_time"] = start_time
+        if end_time is not None:
+            window["end_time"] = end_time
+        return window
+
+    @staticmethod
     def _unwrap_list(data: Any, wrapper_keys: tuple, context_msg: str = "") -> list:
         """Unwrap a list from a possible dict wrapper."""
         if isinstance(data, dict):
@@ -125,6 +139,9 @@ class OkahuSpanLoader:
         endpoint: Optional[str] = None,
         api_key: Optional[str] = None,
         timeout: int = 30,
+        *,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
     ) -> List[str]:
         """Fetch trace IDs from Okahu filtered by a fact.
 
@@ -147,6 +164,7 @@ class OkahuSpanLoader:
             "duration_fact": fact_name,
             "fact_ids": fact_id,
         }
+        params.update(OkahuSpanLoader._window_params(start_time, end_time))
 
         data = OkahuSpanLoader._get_resource(
             base, f"{workflow_name}/traces", headers, params=params, timeout=timeout,
@@ -180,6 +198,9 @@ class OkahuSpanLoader:
         endpoint: Optional[str] = None,
         api_key: Optional[str] = None,
         timeout: int = 30,
+        *,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
     ) -> List[ReadableSpan]:
         """Fetch spans from Okahu for a given trace_id.
 
@@ -212,6 +233,7 @@ class OkahuSpanLoader:
         if filter_fact and filter_fact_id:
             params["filter_fact"] = filter_fact
             params["filter_fact_id"] = filter_fact_id
+        params.update(OkahuSpanLoader._window_params(start_time, end_time))
 
         span_data_list = OkahuSpanLoader._get_resource(
             base, f"{workflow_name}/traces/{trace_id}/spans", headers,
@@ -278,6 +300,9 @@ class OkahuSpanLoader:
         endpoint: Optional[str] = None,
         api_key: Optional[str] = None,
         timeout: int = 60,
+        *,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
     ) -> List[ReadableSpan]:
         """Fetch all spans for every trace matching a custom scope.
 
@@ -317,6 +342,7 @@ class OkahuSpanLoader:
             fact_name=scope_name,
             fact_id=scope_id,
             endpoint=endpoint, api_key=api_key, timeout=timeout,
+            start_time=start_time, end_time=end_time,
         )
         if not trace_ids:
             raise ConnectionError(
@@ -330,6 +356,7 @@ class OkahuSpanLoader:
                 filter_fact=scope_name,
                 filter_fact_id=scope_id,
                 endpoint=endpoint, api_key=api_key, timeout=timeout,
+                start_time=start_time, end_time=end_time,
             )
             all_spans.extend(spans)
 

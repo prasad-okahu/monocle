@@ -398,8 +398,12 @@ class TraceAssertion():
         elif source == "okahu":
             has_id = kwargs.get("id") is not None
             if has_window and has_id:
-                raise ValueError("Provide an 'id' or a time window (start_time/end_time), not both.")
-            if has_window:
+                # A window *with* an id is a bounded lookup: import that fact's
+                # spans, narrowing the server-side query to the window. That is
+                # not filter mode -- filter mode is eval-only and imports no
+                # spans, which is what a window on its own selects.
+                self.validator.import_traces(trace_source=source, **kwargs)
+            elif has_window:
                 # Filter mode: eval-only. Record the scope; import no spans.
                 start_time, end_time = kwargs.get("start_time"), kwargs.get("end_time")
                 if start_time is None or end_time is None:

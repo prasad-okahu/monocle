@@ -630,7 +630,9 @@ class MonocleValidator:
                       fact_name: Optional[str] = "trace",
                       scope_name: Optional[str] = None,
                       workflow_name: Optional[str] = None,
-                      load_spans: bool = True) -> list[Span]:
+                      load_spans: bool = True,
+                      start_time: Optional[str] = None,
+                      end_time: Optional[str] = None) -> list[Span]:
         """Import traces from a source for assertion.
 
         Loads previously exported trace spans into the asserter's memory
@@ -659,6 +661,10 @@ class MonocleValidator:
                 of a recorded trace -- replaying its input into a fresh run --
                 use False, so the source trace's fact id does not end up
                 attached to the new run's result.
+            start_time: Optional window start, narrowing the server-side lookup.
+                Okahu only -- a trace file holds one trace, so there is nothing
+                to narrow and passing it for the file source raises.
+            end_time: Optional window end, as above.
 
         Returns:
             The fetched spans.
@@ -717,6 +723,8 @@ class MonocleValidator:
                     workflow_name=workflow_name,
                     scope_name=okahu_fact_name,
                     scope_id=id,
+                    start_time=start_time,
+                    end_time=end_time,
                 )
             elif fact_name == "scope":
                 # Custom scope: requires scope_name
@@ -727,6 +735,8 @@ class MonocleValidator:
                     workflow_name=workflow_name,
                     scope_name=okahu_fact_name,
                     scope_id=id,
+                    start_time=start_time,
+                    end_time=end_time,
                 )
             else:
                 # Direct trace_id lookup
@@ -734,6 +744,8 @@ class MonocleValidator:
                 spans = OkahuSpanLoader.get_spans(
                     workflow_name=workflow_name,
                     trace_id=id,
+                    start_time=start_time,
+                    end_time=end_time,
                 )
             # Capture the fact details so the test outcome can be recorded back
             # to Okahu during post_test_cleanup. Skipped for a pure fetch: those
@@ -743,6 +755,13 @@ class MonocleValidator:
                 self._trace_source_fact_name = okahu_fact_name
                 self._trace_source_workflow_name = workflow_name
         else:
+            # File source — a time window only filters a server-side query, so
+            # it is rejected here rather than silently ignored.
+            for _name, _value in (("start_time", start_time), ("end_time", end_time)):
+                if _value is not None:
+                    raise ValueError(
+                        f"'{_name}' is not supported for the file trace source; a "
+                        "time window only filters a server-side query.")
             # File source — fact_name must be "trace"
             if fact_name != "trace":
                 raise ValueError(
