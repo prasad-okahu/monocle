@@ -75,11 +75,20 @@ class OkahuEval(BaseEval):
                        page_size: int = 100) -> list:
         """Build FluentTestCases from the traces recorded for a workflow.
 
-        Three steps. ``OkahuSpanLoader.get_trace_ids`` enumerates the traces in the
-        time window -- those ARE the test cases, one each. Each trace's spans are
-        then fetched with ``get_spans`` and read by ``FluentTestCase.from_spans``,
-        which fills in the agents it invoked, the tools they called and the tokens
-        it consumed. Finally, only when ``eval_name`` is given,
+        One test case per fact in the window. How the facts are found depends on
+        the level:
+
+        - ``traces`` (the default): a trace is its own fact, so
+          ``OkahuSpanLoader.get_trace_ids`` enumerates them and each has one
+          trace's spans.
+        - anything above a trace (agent requests, sessions, ...):
+          ``get_fact_ids`` enumerates them from the fact ids API, then each
+          fact's traces are looked up and *all* their spans concatenated -- the
+          combined set is what describes that fact.
+
+        Either way the spans are read by ``FluentTestCase.from_spans``, which
+        fills in the agents invoked, the tools they called and the tokens
+        consumed. Finally, only when ``eval_name`` is given,
         ``/v1/workflows/{workflow_name}/evals/report`` is asked about exactly those
         traces (``fact_ids``) and that eval, and the labels it returns become each
         case's expected results.
@@ -88,8 +97,9 @@ class OkahuEval(BaseEval):
         would derive: ``with_trace_source(testcase=...)`` needs a FactID, and
         ``run_agent(testcase=...)`` resolves one into the prompt itself.
 
-        This is one request per trace plus one for the report, so a wide window is
-        a lot of calls.
+        This is one request per trace plus one for the report, and above trace
+        level another per fact to find its traces -- so a wide window is a lot of
+        calls.
 
         Sending ``fact_ids`` takes the report endpoint OUT of discovery mode -- the
         absence of fact_ids is what selects discovery -- so it reports on traces
@@ -152,10 +162,17 @@ class OkahuEval(BaseEval):
 
         from monocle_test_tools.okahu_span_loader import OkahuSpanLoader
 
-        # The traces in the window ARE the test cases. The eval report only
-        # enriches them, so it is not called at all without an eval_name.
-        fact_ids = [normalize_fact_id(tid) for tid in OkahuSpanLoader.get_trace_ids(
-            workflow_name, start_time=start_time, end_time=end_time)]
+        mapped_fact_name = cls._map_fact_name(fact_name)
+        # A trace IS its own fact, so the trace list is the fact list. Any level
+        # above a trace -- agent requests, sessions -- is enumerated by its own
+        # ids API, and each of those facts spans one or more traces.
+        if mapped_fact_name == "traces":
+            fact_ids = [normalize_fact_id(tid) for tid in OkahuSpanLoader.get_trace_ids(
+                workflow_name, start_time=start_time, end_time=end_time)]
+        else:
+            fact_ids = OkahuSpanLoader.get_fact_ids(
+                workflow_name, mapped_fact_name,
+                start_time=start_time, end_time=end_time)
         if not fact_ids:
             return []
 
@@ -163,7 +180,7 @@ class OkahuEval(BaseEval):
         if eval_name:
             evals_by_fact = cls._eval_report_by_fact(
                 workflow_name=workflow_name, fact_ids=fact_ids,
-                fact_name=cls._map_fact_name(fact_name), start_time=start_time,
+                fact_name=mapped_fact_name, start_time=start_time,
                 end_time=end_time, category=category, eval_name=eval_name,
                 page_size=page_size)
 
@@ -175,12 +192,13 @@ class OkahuEval(BaseEval):
                 # for it. An empty evals list raises in check_eval, so emitting the
                 # case would poison the suite it is meant to feed.
                 continue
-            # from_spans reads the agents, tools and token count off the trace;
+            # from_spans reads the agents, tools and token count off the spans;
             # name and input are supplied here. input stays the FactID rather than
             # the recorded prompt from_spans would derive: with_trace_source
             # needs a FactID and run_agent resolves one into the prompt anyway.
-            spans = OkahuSpanLoader.get_spans(
-                workflow_name, fact_id, start_time=start_time, end_time=end_time)
+            spans = cls._fact_spans(
+                workflow_name, fact_id, mapped_fact_name=mapped_fact_name,
+                start_time=start_time, end_time=end_time)
             test_cases.append(FluentTestCase.from_spans(
                 spans,
                 name=fact_id,
@@ -189,9 +207,32 @@ class OkahuEval(BaseEval):
 
         dropped = len(fact_ids) - len(test_cases)
         if dropped:
-            logger.info("get_test_cases: %d of %d traces had no labelled '%s' eval "
+            logger.info("get_test_cases: %d of %d facts had no labelled '%s' eval "
                         "and were dropped", dropped, len(fact_ids), eval_name)
         return test_cases
+
+    @classmethod
+    def _fact_spans(cls, workflow_name, fact_id, *, mapped_fact_name,
+                    start_time, end_time) -> list:
+        """Every span belonging to one fact.
+
+        A trace-level fact is one trace, so its spans are one call. A higher
+        level fact spans one or more traces, so its traces are looked up and
+        their spans concatenated -- the combined set is what describes the fact.
+        """
+        from monocle_test_tools.okahu_span_loader import OkahuSpanLoader
+
+        if mapped_fact_name == "traces":
+            return OkahuSpanLoader.get_spans(
+                workflow_name, fact_id, start_time=start_time, end_time=end_time)
+
+        spans = []
+        for trace_id in OkahuSpanLoader.get_trace_ids(
+                workflow_name, mapped_fact_name, fact_id,
+                start_time=start_time, end_time=end_time):
+            spans.extend(OkahuSpanLoader.get_spans(
+                workflow_name, trace_id, start_time=start_time, end_time=end_time))
+        return spans
 
     @classmethod
     def _eval_report_by_fact(cls, *, workflow_name, fact_ids, fact_name, start_time,

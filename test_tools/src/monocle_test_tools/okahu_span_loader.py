@@ -132,6 +132,68 @@ class OkahuSpanLoader:
     # ------------------------------------------------------------------ #
 
     @staticmethod
+    def get_fact_ids(
+        workflow_name: str,
+        fact_name: str,
+        endpoint: Optional[str] = None,
+        api_key: Optional[str] = None,
+        timeout: int = 30,
+        *,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+    ) -> List[str]:
+        """Fetch the ids of every fact of one level in a workflow.
+
+        Uses:  GET /api/v1/workflows/<wf>/facts/<fact_name>/ids
+               ?duration_fact=<fact_name>&breakdown_filter=<fact_name>
+
+        This is the entry point for any fact level above a trace -- agent
+        requests, sessions, conversations. A trace-level set comes from
+        ``get_trace_ids`` instead.
+
+        The response keys ``fact_ids`` to an object keyed by id, not to a list,
+        so the ids are its keys and the order is the server's. Each value holds
+        that fact's timing and status, and *sometimes* a ``traces`` array -- only
+        for the first entry, in practice. That array is deliberately ignored:
+        relying on it would make one fact behave differently from the rest, so
+        every fact's traces are fetched uniformly with ``get_trace_ids``.
+
+        Args:
+            workflow_name: The workflow / service name registered in Okahu.
+            fact_name: The Okahu fact level (e.g. ``agent_requests``), already
+                mapped -- this goes straight into the URL path.
+            endpoint: Okahu API base URL override.
+            api_key: Okahu API key override.
+            timeout: Request timeout in seconds.
+            start_time: Optional window start.
+            end_time: Optional window end.
+
+        Returns:
+            The fact ids, in the order the server returned them.
+        """
+        base = OkahuSpanLoader._get_api_base(endpoint)
+        headers = OkahuSpanLoader._get_headers(api_key)
+        url = f"{base}/api/v1/workflows/{workflow_name}/facts/{fact_name}/ids"
+        params = {"duration_fact": fact_name, "breakdown_filter": fact_name}
+        params.update(OkahuSpanLoader._window_params(start_time, end_time))
+
+        data = OkahuSpanLoader._do_get(
+            url, headers, params=params, timeout=timeout,
+            context_msg=f"{fact_name} ids in workflow '{workflow_name}'")
+
+        fact_ids = (data or {}).get("fact_ids")
+        if isinstance(fact_ids, dict):
+            return list(fact_ids)
+        if isinstance(fact_ids, list):
+            return [item.get("fact_id") if isinstance(item, dict) else item
+                    for item in fact_ids]
+        if fact_ids is None:
+            return []
+        raise ConnectionError(
+            f"Okahu returned an unexpected 'fact_ids' for {fact_name} in workflow "
+            f"'{workflow_name}': {type(fact_ids).__name__}")
+
+    @staticmethod
     def get_trace_ids(
         workflow_name: str,
         fact_name: Optional[str] = None,

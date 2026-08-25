@@ -105,6 +105,9 @@ def stub_traces_fixture(monkeypatch):
 
     monkeypatch.setattr(OkahuSpanLoader, "get_trace_ids",
                         staticmethod(lambda *a, **k: list(TRACE_IDS)))
+    # A non-trace fact level is enumerated by its own ids API instead.
+    monkeypatch.setattr(OkahuSpanLoader, "get_fact_ids",
+                        staticmethod(lambda *a, **k: list(TRACE_IDS)))
 
 
 @pytest.mark.usefixtures("stub_traces")
@@ -832,3 +835,167 @@ class TestPopulatedFromSpans:
 
         assert OkahuEval.get_test_cases(**WINDOW) == []
         assert spans == []
+
+
+class TestGetFactIds:
+    """The /facts/<fact_name>/ids API, used for any fact level but traces."""
+
+    # Trimmed from a real response. fact_ids is a dict keyed by id, and only the
+    # first entry carries its "traces" -- which is why that array is ignored and
+    # get_trace_ids is called per fact instead.
+    RESPONSE = {
+        "fact_ids": {
+            "e-3f7fa612": {"start_time": "2026-08-25T03:50:49.791288Z",
+                           "status": "success",
+                           "traces": [{"trace_id": "abcb6014b546f5f36da4c144189ac754"}]},
+            "e-66d09ec8": {"start_time": "2026-08-25T03:50:41.192776Z",
+                           "status": "success"},
+            "e-654de171": {"start_time": "2026-08-25T03:50:33.361032Z",
+                           "status": "success"},
+        },
+        "fact_count": 3,
+    }
+
+    @pytest.fixture(name="get")
+    def get_fixture(self, monkeypatch):
+        from monocle_test_tools.okahu_span_loader import OkahuSpanLoader
+
+        seen = {"payload": self.RESPONSE}
+
+        def fake_do_get(url, headers, params=None, timeout=30, context_msg=""):
+            seen["url"] = url
+            seen["params"] = params
+            return seen["payload"]
+
+        monkeypatch.setattr(OkahuSpanLoader, "_do_get", staticmethod(fake_do_get))
+        return seen
+
+    def test_hits_the_ids_path_for_the_fact(self, get):
+        from monocle_test_tools.okahu_span_loader import OkahuSpanLoader
+
+        OkahuSpanLoader.get_fact_ids("wf", "agent_requests",
+                                     start_time="a", end_time="b")
+
+        assert get["url"].endswith("/api/v1/workflows/wf/facts/agent_requests/ids")
+
+    def test_sends_duration_fact_and_breakdown_filter(self, get):
+        from monocle_test_tools.okahu_span_loader import OkahuSpanLoader
+
+        OkahuSpanLoader.get_fact_ids("wf", "agent_requests",
+                                     start_time="a", end_time="b")
+
+        assert get["params"]["duration_fact"] == "agent_requests"
+        assert get["params"]["breakdown_filter"] == "agent_requests"
+        assert get["params"]["start_time"] == "a"
+        assert get["params"]["end_time"] == "b"
+
+    def test_returns_the_keys_in_response_order(self, get):
+        from monocle_test_tools.okahu_span_loader import OkahuSpanLoader
+
+        assert OkahuSpanLoader.get_fact_ids("wf", "agent_requests") == [
+            "e-3f7fa612", "e-66d09ec8", "e-654de171"]
+
+    def test_no_facts_gives_an_empty_list(self, get):
+        from monocle_test_tools.okahu_span_loader import OkahuSpanLoader
+
+        get["payload"] = {"fact_ids": {}, "fact_count": 0}
+
+        assert OkahuSpanLoader.get_fact_ids("wf", "agent_requests") == []
+
+
+class TestNonTraceFactLevel:
+    """A non-trace fact fans out: fact ids -> traces per fact -> spans per trace.
+
+    Every span of every trace belonging to one fact is combined into that fact's
+    single test case.
+    """
+
+    TRACE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "traces", "trace1.json")
+
+    @pytest.fixture(name="okahu")
+    def okahu_fixture(self, monkeypatch):
+        from monocle_test_tools.okahu_span_loader import OkahuSpanLoader
+        from monocle_test_tools.span_loader import JSONSpanLoader
+
+        loaded = JSONSpanLoader.from_json(self.TRACE)
+        seen = {"facts": ["e-aaa", "e-bbb"],
+                "traces_per_fact": {"e-aaa": ["t1", "t2"], "e-bbb": ["t3"]},
+                "fact_calls": [], "trace_calls": [], "span_calls": []}
+
+        def fake_fact_ids(workflow_name, fact_name, **kwargs):
+            seen["fact_calls"].append({"workflow_name": workflow_name,
+                                       "fact_name": fact_name, **kwargs})
+            return list(seen["facts"])
+
+        def fake_trace_ids(workflow_name, fact_name=None, fact_id=None, **kwargs):
+            seen["trace_calls"].append({"fact_name": fact_name, "fact_id": fact_id,
+                                        **kwargs})
+            return list(seen["traces_per_fact"].get(fact_id, []))
+
+        def fake_spans(workflow_name, trace_id, **kwargs):
+            seen["span_calls"].append(trace_id)
+            return loaded
+
+        monkeypatch.setattr(OkahuSpanLoader, "get_fact_ids", staticmethod(fake_fact_ids))
+        monkeypatch.setattr(OkahuSpanLoader, "get_trace_ids", staticmethod(fake_trace_ids))
+        monkeypatch.setattr(OkahuSpanLoader, "get_spans", staticmethod(fake_spans))
+        return seen
+
+    def test_fact_ids_are_fetched_with_the_mapped_name(self, okahu, post):
+        OkahuEval.get_test_cases(**WINDOW, fact_name="agentic_turns")
+
+        assert okahu["fact_calls"][0]["fact_name"] == "agent_requests"
+        assert okahu["fact_calls"][0]["start_time"] == "2026-05-01"
+
+    def test_one_case_per_fact_not_per_trace(self, okahu, post):
+        cases = OkahuEval.get_test_cases(**WINDOW, fact_name="agentic_turns")
+
+        assert [c.name for c in cases] == ["e-aaa", "e-bbb"]
+
+    def test_traces_are_looked_up_per_fact(self, okahu, post):
+        OkahuEval.get_test_cases(**WINDOW, fact_name="agentic_turns")
+
+        assert [c["fact_id"] for c in okahu["trace_calls"]] == ["e-aaa", "e-bbb"]
+        assert okahu["trace_calls"][0]["fact_name"] == "agent_requests"
+
+    def test_spans_are_fetched_for_every_trace_of_every_fact(self, okahu, post):
+        OkahuEval.get_test_cases(**WINDOW, fact_name="agentic_turns")
+
+        assert okahu["span_calls"] == ["t1", "t2", "t3"]
+
+    def test_a_facts_spans_are_combined_across_its_traces(self, okahu, post):
+        """e-aaa spans two traces, so it carries twice one trace's tool calls."""
+        cases = OkahuEval.get_test_cases(**WINDOW, fact_name="agentic_turns")
+
+        two_traces = [c for c in cases if c.name == "e-aaa"][0]
+        one_trace = [c for c in cases if c.name == "e-bbb"][0]
+        assert two_traces.token_limit == 2 * one_trace.token_limit
+
+    def test_the_input_is_the_fact_not_a_trace(self, okahu, post):
+        cases = OkahuEval.get_test_cases(**WINDOW, fact_name="agentic_turns")
+
+        assert cases[0].input == FactID(fact_id="e-aaa", fact_name="agentic_turns",
+                                        source="okahu")
+
+    def test_evals_are_reported_against_the_fact_ids(self, okahu, post):
+        _queue(post, {"results": [_row("e-aaa", "hallucination", "minor"),
+                                  _row("e-bbb", "hallucination", "major")]})
+
+        cases = OkahuEval.get_test_cases(**WINDOW, fact_name="agentic_turns",
+                                         eval_name=EVAL)
+
+        assert post["calls"][0]["body"]["fact_ids"] == ["e-aaa", "e-bbb"]
+        assert cases[0].evals == [Eval(name="hallucination", result="minor")]
+
+    def test_traces_fact_level_still_uses_the_trace_path(self, okahu, post):
+        """fact_name="traces" must not touch the facts/ids API."""
+        OkahuEval.get_test_cases(**WINDOW)
+
+        assert okahu["fact_calls"] == []
+
+    def test_no_facts_gives_no_cases(self, okahu, post):
+        okahu["facts"] = []
+
+        assert OkahuEval.get_test_cases(**WINDOW, fact_name="agentic_turns") == []
+        assert okahu["span_calls"] == []
