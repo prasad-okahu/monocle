@@ -168,11 +168,12 @@ class OkahuEval(BaseEval):
         # ids API, and each of those facts spans one or more traces.
         if mapped_fact_name == "traces":
             fact_ids = [normalize_fact_id(tid) for tid in OkahuSpanLoader.get_trace_ids(
-                workflow_name, start_time=start_time, end_time=end_time)]
+                workflow_name, start_time=start_time, end_time=end_time,
+                eval_filter=eval_name)]
         else:
             fact_ids = OkahuSpanLoader.get_fact_ids(
                 workflow_name, mapped_fact_name,
-                start_time=start_time, end_time=end_time)
+                start_time=start_time, end_time=end_time, eval_filter=eval_name)
         if not fact_ids:
             return []
 
@@ -198,7 +199,7 @@ class OkahuEval(BaseEval):
             # needs a FactID and run_agent resolves one into the prompt anyway.
             spans = cls._fact_spans(
                 workflow_name, fact_id, mapped_fact_name=mapped_fact_name,
-                start_time=start_time, end_time=end_time)
+                start_time=start_time, end_time=end_time, eval_filter=eval_name)
             test_cases.append(FluentTestCase.from_spans(
                 spans,
                 name=fact_id,
@@ -213,7 +214,7 @@ class OkahuEval(BaseEval):
 
     @classmethod
     def _fact_spans(cls, workflow_name, fact_id, *, mapped_fact_name,
-                    start_time, end_time) -> list:
+                    start_time, end_time, eval_filter=None) -> list:
         """Every span belonging to one fact.
 
         A trace-level fact is one trace, so its spans are one call. A higher
@@ -229,7 +230,7 @@ class OkahuEval(BaseEval):
         spans = []
         for trace_id in OkahuSpanLoader.get_trace_ids(
                 workflow_name, mapped_fact_name, fact_id,
-                start_time=start_time, end_time=end_time):
+                start_time=start_time, end_time=end_time, eval_filter=eval_filter):
             spans.extend(OkahuSpanLoader.get_spans(
                 workflow_name, trace_id, start_time=start_time, end_time=end_time))
         return spans

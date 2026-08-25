@@ -111,6 +111,15 @@ class OkahuSpanLoader:
         return window
 
     @staticmethod
+    def _eval_param(eval_filter: Optional[str]) -> dict:
+        """The eval query param, omitted when no filter is given.
+
+        Sent raw -- requests percent-encodes it -- so the value may be a bare
+        eval name or the API's ``name:label;name:label`` form.
+        """
+        return {"eval": eval_filter} if eval_filter else {}
+
+    @staticmethod
     def _unwrap_list(data: Any, wrapper_keys: tuple, context_msg: str = "") -> list:
         """Unwrap a list from a possible dict wrapper."""
         if isinstance(data, dict):
@@ -141,6 +150,7 @@ class OkahuSpanLoader:
         *,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
+        eval_filter: Optional[str] = None,
     ) -> List[str]:
         """Fetch the ids of every fact of one level in a workflow.
 
@@ -167,6 +177,9 @@ class OkahuSpanLoader:
             timeout: Request timeout in seconds.
             start_time: Optional window start.
             end_time: Optional window end.
+            eval_filter: Optional ``eval`` filter narrowing the result set to
+                facts carrying it -- a bare eval name, or the API's
+                ``name:label;name:label`` form.
 
         Returns:
             The fact ids, in the order the server returned them.
@@ -176,6 +189,7 @@ class OkahuSpanLoader:
         url = f"{base}/api/v1/workflows/{workflow_name}/facts/{fact_name}/ids"
         params = {"duration_fact": fact_name, "breakdown_filter": fact_name}
         params.update(OkahuSpanLoader._window_params(start_time, end_time))
+        params.update(OkahuSpanLoader._eval_param(eval_filter))
 
         data = OkahuSpanLoader._do_get(
             url, headers, params=params, timeout=timeout,
@@ -204,6 +218,7 @@ class OkahuSpanLoader:
         *,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
+        eval_filter: Optional[str] = None,
     ) -> List[str]:
         """Fetch trace IDs from Okahu filtered by a fact.
 
@@ -219,6 +234,9 @@ class OkahuSpanLoader:
                 but only together with fact_id.
             fact_id: The fact value (e.g. a session ID). Optional, but only
                 together with fact_name.
+            eval_filter: Optional ``eval`` filter narrowing the result set to
+                traces carrying it -- a bare eval name, or the API's
+                ``name:label;name:label`` form.
             endpoint: Okahu API base URL override.
             api_key: Okahu API key override.
             timeout: Request timeout in seconds.
@@ -242,6 +260,7 @@ class OkahuSpanLoader:
             params["duration_fact"] = fact_name
             params["fact_ids"] = fact_id
         params.update(OkahuSpanLoader._window_params(start_time, end_time))
+        params.update(OkahuSpanLoader._eval_param(eval_filter))
 
         data = OkahuSpanLoader._get_resource(
             base, f"{workflow_name}/traces", headers, params=params, timeout=timeout,

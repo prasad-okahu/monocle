@@ -999,3 +999,114 @@ class TestNonTraceFactLevel:
 
         assert OkahuEval.get_test_cases(**WINDOW, fact_name="agentic_turns") == []
         assert okahu["span_calls"] == []
+
+
+class TestEvalFilter:
+    """An eval_name narrows the fact/trace lookup as well as the report.
+
+    The value is passed raw; requests percent-encodes it, so a caller may also
+    hand the loaders the API's name:label form ("frustration:ok;bias:biased")
+    directly.
+    """
+
+    @pytest.fixture(name="get")
+    def get_fixture(self, monkeypatch):
+        from monocle_test_tools.okahu_span_loader import OkahuSpanLoader
+
+        seen = {"payload": {"fact_ids": {}}}
+
+        def fake_do_get(url, headers, params=None, timeout=30, context_msg=""):
+            seen["params"] = params
+            return seen["payload"]
+
+        monkeypatch.setattr(OkahuSpanLoader, "_do_get", staticmethod(fake_do_get))
+        return seen
+
+    def test_get_fact_ids_sends_the_filter(self, get):
+        from monocle_test_tools.okahu_span_loader import OkahuSpanLoader
+
+        OkahuSpanLoader.get_fact_ids("wf", "agent_requests", eval_filter="frustration")
+
+        assert get["params"]["eval"] == "frustration"
+
+    def test_get_fact_ids_omits_it_when_absent(self, get):
+        from monocle_test_tools.okahu_span_loader import OkahuSpanLoader
+
+        OkahuSpanLoader.get_fact_ids("wf", "agent_requests")
+
+        assert "eval" not in get["params"]
+
+    def test_get_trace_ids_sends_the_filter(self, get):
+        from monocle_test_tools.okahu_span_loader import OkahuSpanLoader
+
+        get["payload"] = []
+        OkahuSpanLoader.get_trace_ids("wf", eval_filter="frustration")
+
+        assert get["params"]["eval"] == "frustration"
+
+    def test_get_trace_ids_omits_it_when_absent(self, get):
+        from monocle_test_tools.okahu_span_loader import OkahuSpanLoader
+
+        get["payload"] = []
+        OkahuSpanLoader.get_trace_ids("wf")
+
+        assert "eval" not in get["params"]
+
+    def test_a_name_label_string_passes_through_unencoded(self, get):
+        """Encoding is requests' job; the loader must not double-encode."""
+        from monocle_test_tools.okahu_span_loader import OkahuSpanLoader
+
+        OkahuSpanLoader.get_fact_ids("wf", "agent_requests",
+                                     eval_filter="frustration:ok;bias:biased")
+
+        assert get["params"]["eval"] == "frustration:ok;bias:biased"
+
+
+class TestEvalFilterThreading:
+    """get_test_cases passes eval_name down as the filter on both paths."""
+
+    @pytest.fixture(name="okahu")
+    def okahu_fixture(self, monkeypatch):
+        from monocle_test_tools.okahu_span_loader import OkahuSpanLoader
+
+        seen = {"fact_calls": [], "trace_calls": []}
+
+        def fake_fact_ids(workflow_name, fact_name, **kwargs):
+            seen["fact_calls"].append(kwargs)
+            return ["e-aaa"]
+
+        def fake_trace_ids(workflow_name, fact_name=None, fact_id=None, **kwargs):
+            seen["trace_calls"].append(kwargs)
+            return ["t1"]
+
+        monkeypatch.setattr(OkahuSpanLoader, "get_fact_ids", staticmethod(fake_fact_ids))
+        monkeypatch.setattr(OkahuSpanLoader, "get_trace_ids", staticmethod(fake_trace_ids))
+        monkeypatch.setattr(OkahuSpanLoader, "get_spans", staticmethod(lambda *a, **k: []))
+        return seen
+
+    def test_trace_path_filters_the_trace_lookup(self, okahu, post):
+        _queue(post, {"results": [_row("t1", "hallucination", "minor")]})
+
+        OkahuEval.get_test_cases(**WINDOW, eval_name=EVAL)
+
+        assert okahu["trace_calls"][0]["eval_filter"] == EVAL
+
+    def test_fact_path_filters_the_ids_lookup(self, okahu, post):
+        _queue(post, {"results": [_row("e-aaa", "hallucination", "minor")]})
+
+        OkahuEval.get_test_cases(**WINDOW, fact_name="agentic_turns", eval_name=EVAL)
+
+        assert okahu["fact_calls"][0]["eval_filter"] == EVAL
+
+    def test_fact_path_filters_the_per_fact_trace_lookup(self, okahu, post):
+        _queue(post, {"results": [_row("e-aaa", "hallucination", "minor")]})
+
+        OkahuEval.get_test_cases(**WINDOW, fact_name="agentic_turns", eval_name=EVAL)
+
+        assert okahu["trace_calls"][0]["eval_filter"] == EVAL
+
+    def test_no_eval_name_means_no_filter_anywhere(self, okahu, post):
+        OkahuEval.get_test_cases(**WINDOW, fact_name="agentic_turns")
+
+        assert okahu["fact_calls"][0]["eval_filter"] is None
+        assert okahu["trace_calls"][0]["eval_filter"] is None
