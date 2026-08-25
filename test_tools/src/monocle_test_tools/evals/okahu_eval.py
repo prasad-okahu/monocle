@@ -75,20 +75,30 @@ class OkahuEval(BaseEval):
                        page_size: int = 100) -> list:
         """Build FluentTestCases from the traces recorded for a workflow.
 
-        Two steps. First ``OkahuSpanLoader.get_trace_ids`` enumerates the traces in
-        the time window -- those ARE the test cases, one each, with the trace as the
-        FactID input. Then, only when ``eval_name`` is given,
+        Three steps. ``OkahuSpanLoader.get_trace_ids`` enumerates the traces in the
+        time window -- those ARE the test cases, one each. Each trace's spans are
+        then fetched with ``get_spans`` and read by ``FluentTestCase.from_spans``,
+        which fills in the agents it invoked, the tools they called and the tokens
+        it consumed. Finally, only when ``eval_name`` is given,
         ``/v1/workflows/{workflow_name}/evals/report`` is asked about exactly those
         traces (``fact_ids``) and that eval, and the labels it returns become each
         case's expected results.
+
+        The case's ``input`` stays the FactID rather than the prompt from_spans
+        would derive: ``with_trace_source(testcase=...)`` needs a FactID, and
+        ``run_agent(testcase=...)`` resolves one into the prompt itself.
+
+        This is one request per trace plus one for the report, so a wide window is
+        a lot of calls.
 
         Sending ``fact_ids`` takes the report endpoint OUT of discovery mode -- the
         absence of fact_ids is what selects discovery -- so it reports on traces
         already enumerated rather than re-discovering them.
 
         Without ``eval_name`` no report call is made at all and the cases carry no
-        evals, which is what ``run_agent(testcase=...)`` needs to replay a recorded
-        input. With one, a trace that has no labelled result for that eval is
+        evals -- still fully described otherwise, and ready for
+        ``run_agent(testcase=...)`` to replay. With one, a trace that has no
+        labelled result for that eval is
         dropped: an empty ``evals`` list raises in ``check_eval``, so emitting the
         case would poison the suite it is meant to feed. The dropped count is
         logged rather than passed over in silence.
@@ -165,7 +175,14 @@ class OkahuEval(BaseEval):
                 # for it. An empty evals list raises in check_eval, so emitting the
                 # case would poison the suite it is meant to feed.
                 continue
-            test_cases.append(FluentTestCase(
+            # from_spans reads the agents, tools and token count off the trace;
+            # name and input are supplied here. input stays the FactID rather than
+            # the recorded prompt from_spans would derive: with_trace_source
+            # needs a FactID and run_agent resolves one into the prompt anyway.
+            spans = OkahuSpanLoader.get_spans(
+                workflow_name, fact_id, start_time=start_time, end_time=end_time)
+            test_cases.append(FluentTestCase.from_spans(
+                spans,
                 name=fact_id,
                 input=FactID(fact_id=fact_id, fact_name=fact_name, source="okahu"),
                 evals=evals))

@@ -7,6 +7,8 @@ fact_ids takes that endpoint out of discovery mode, whose selector was their
 absence. Either way the cases feed straight into the testcase= plumbing on
 with_trace_source / run_agent / check_eval.
 """
+import os
+
 import pytest
 
 from monocle_test_tools.evals.okahu_eval import OkahuEval
@@ -76,6 +78,19 @@ EVAL = "hallucination"
 # list and the eval report only enriches it, so every report-focused test needs
 # some traces to exist. Tests that care about the set override TRACE_IDS[:].
 TRACE_IDS = ["aaa", "bbb", "9ade6084ba144b138090d64d1a082450"]
+
+
+@pytest.fixture(autouse=True)
+def _stub_get_spans(monkeypatch):
+    """Every trace is now fetched, so keep that off the network by default.
+
+    Returns no spans, which from_spans turns into a case with empty agents and
+    tools -- all the report-focused tests need. TestPopulatedFromSpans overrides
+    this with a real recorded trace.
+    """
+    from monocle_test_tools.okahu_span_loader import OkahuSpanLoader
+
+    monkeypatch.setattr(OkahuSpanLoader, "get_spans", staticmethod(lambda *a, **k: []))
 
 
 @pytest.fixture(name="stub_traces")
@@ -720,3 +735,100 @@ class TestOptionalFactFilter:
 
         with pytest.raises(ValueError, match="fact_name and fact_id"):
             OkahuSpanLoader.get_trace_ids("wf", **half)
+
+
+class TestPopulatedFromSpans:
+    """Each trace's spans fill in the case: agents, tools, token_limit.
+
+    from_spans does the reading; get_test_cases supplies name, the FactID input
+    and the evals, so the result is a fully described case rather than a bare
+    pointer at a fact.
+    """
+
+    TRACE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "traces", "trace1.json")
+    # from_spans orders by span start_time, i.e. call order -- the supervisor
+    # is invoked first and delegates to the rest.
+    AGENTS = ["adk_supervisor_agent_5", "adk_flight_booking_agent_5",
+              "adk_hotel_booking_agent_5", "adk_trip_summary_agent_5"]
+
+    @pytest.fixture(name="spans")
+    def spans_fixture(self, monkeypatch):
+        """Stub get_spans with a real recorded trace, recording its calls."""
+        from monocle_test_tools.okahu_span_loader import OkahuSpanLoader
+        from monocle_test_tools.span_loader import JSONSpanLoader
+
+        loaded = JSONSpanLoader.from_json(self.TRACE)
+        calls = []
+
+        def fake(workflow_name, trace_id, **kwargs):
+            calls.append({"workflow_name": workflow_name, "trace_id": trace_id, **kwargs})
+            return loaded
+
+        monkeypatch.setattr(OkahuSpanLoader, "get_spans", staticmethod(fake))
+        monkeypatch.setattr(OkahuSpanLoader, "get_trace_ids",
+                            staticmethod(lambda *a, **k: ["aaa", "bbb"]))
+        return calls
+
+    def test_get_spans_is_called_once_per_trace(self, spans, post):
+        OkahuEval.get_test_cases(**WINDOW)
+
+        assert [c["trace_id"] for c in spans] == ["aaa", "bbb"]
+
+    def test_get_spans_gets_the_window(self, spans, post):
+        OkahuEval.get_test_cases(**WINDOW)
+
+        assert spans[0]["start_time"] == "2026-05-01"
+        assert spans[0]["end_time"] == "2026-06-30"
+
+    def test_agents_are_populated(self, spans, post):
+        cases = OkahuEval.get_test_cases(**WINDOW)
+
+        assert [a.name for a in cases[0].agents] == self.AGENTS
+
+    def test_agents_carry_their_recorded_output(self, spans, post):
+        cases = OkahuEval.get_test_cases(**WINDOW)
+
+        hotel = [a for a in cases[0].agents
+                 if a.name == "adk_hotel_booking_agent_5"][0]
+        assert hotel.output.startswith("OK. I have booked a stay")
+
+    def test_tools_are_populated(self, spans, post):
+        cases = OkahuEval.get_test_cases(**WINDOW)
+
+        assert [t.name for t in cases[0].tools] == ["adk_book_hotel_5"]
+
+    def test_token_limit_is_populated(self, spans, post):
+        cases = OkahuEval.get_test_cases(**WINDOW)
+
+        assert cases[0].token_limit and cases[0].token_limit > 0
+
+    def test_input_is_the_factid_not_the_recorded_prompt(self, spans, post):
+        """with_trace_source(testcase=) needs a FactID; run_agent resolves it."""
+        cases = OkahuEval.get_test_cases(**WINDOW)
+
+        assert cases[0].input == FactID(fact_id="aaa", fact_name="traces",
+                                        source="okahu")
+
+    def test_name_is_the_fact_id_not_the_workflow(self, spans, post):
+        cases = OkahuEval.get_test_cases(**WINDOW)
+
+        assert [c.name for c in cases] == ["aaa", "bbb"]
+
+    def test_evals_are_attached_alongside_the_agents(self, spans, post):
+        _queue(post, {"results": [_row("aaa", "hallucination", "minor"),
+                                  _row("bbb", "hallucination", "major")]})
+
+        cases = OkahuEval.get_test_cases(**WINDOW, eval_name=EVAL)
+
+        assert cases[0].evals == [Eval(name="hallucination", result="minor")]
+        assert [a.name for a in cases[0].agents] == self.AGENTS
+
+    def test_no_traces_means_no_get_spans_calls(self, monkeypatch, spans, post):
+        from monocle_test_tools.okahu_span_loader import OkahuSpanLoader
+
+        monkeypatch.setattr(OkahuSpanLoader, "get_trace_ids",
+                            staticmethod(lambda *a, **k: []))
+
+        assert OkahuEval.get_test_cases(**WINDOW) == []
+        assert spans == []
