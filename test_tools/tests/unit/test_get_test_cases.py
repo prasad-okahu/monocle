@@ -554,8 +554,3 @@ class TestLocalSource:
         with pytest.raises(ValueError, match=r"test case 1\b"):
             get_test_cases(source="local", path=path)
 
-    def test_eval_name_is_rejected_for_local(self, tmp_path):
-        path = self._write(tmp_path, [{"evals": {"hallucination": "minor"}}])
-
-        with pytest.raises(ValueError, match="eval_name"):
-            get_test_cases(source="local", path=path, eval_name="hallucination")

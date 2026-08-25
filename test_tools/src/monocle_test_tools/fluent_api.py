@@ -25,8 +25,7 @@ from .trace_utils import get_function_signature, get_caller_file_line
 from .schema import MockTool
 from opentelemetry.sdk.trace import Span
 
-def get_test_cases(source:str = "okahu", eval_name:Optional[str] = None,
-                   **kwargs) -> list[FluentTestCase]:
+def get_test_cases(source:str = "okahu", **kwargs) -> list[FluentTestCase]:
     """Build FluentTestCases from evals already recorded on a trace source.
 
     Turns a recorded population into a parametrizable list: each returned case
@@ -74,10 +73,6 @@ def get_test_cases(source:str = "okahu", eval_name:Optional[str] = None,
             raise ValueError(
                 "'path' is required for source='local'; it names the JSON file "
                 "holding the array of test cases.")
-        if eval_name is not None:
-            raise ValueError(
-                "'eval_name' cannot be combined with source='local'; it filters the "
-                "okahu query, and for a file the file itself is the set of cases.")
         if kwargs:
             raise ValueError(
                 f"source='local' takes only 'path'; got {sorted(kwargs)}")
@@ -89,7 +84,7 @@ def get_test_cases(source:str = "okahu", eval_name:Optional[str] = None,
             f"get_test_cases does not support source '{source}'; supported sources "
             "are 'okahu' (discover from the eval store) and 'local' (a JSON file).")
     from .evals.okahu_eval import OkahuEval
-    return OkahuEval.get_test_cases(eval_name=eval_name, **kwargs)
+    return OkahuEval.get_test_cases(**kwargs)
 
 def collect_assertions(func):
     """
