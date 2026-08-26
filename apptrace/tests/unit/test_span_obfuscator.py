@@ -287,6 +287,22 @@ class TestCredentialRedaction:
     def test_the_secret_value_is_gone(self, secret, template):
         assert secret not in scrub(template.format(secret))
 
+    @pytest.mark.parametrize("text,expected", [
+        # An unquoted value runs to the next delimiter, which must not swallow the
+        # sentence punctuation around it.
+        ("password=hunter2. Next sentence.", "password=<REDACTED>. Next sentence."),
+        ("Use password=hunter2! Then stop.", "Use password=<REDACTED>! Then stop."),
+        ("What is the api_key: abc123?", "What is the api_key: <REDACTED>?"),
+        ("api_key=abc123, and more", "api_key=<REDACTED>, and more"),
+        ("password: hunter2; done", "password: <REDACTED>; done"),
+        # Dots inside the value are part of the secret, only trailing ones are not.
+        ("password=a.b.c.", "password=<REDACTED>."),
+        # Nothing but punctuation is not a secret.
+        ("password=.", "password=."),
+    ])
+    def test_keeps_punctuation_around_the_redacted_value(self, text, expected):
+        assert scrub(text) == expected
+
     def test_redacted_json_payload_stays_parseable(self):
         result = scrub(f'{{"model": "gpt-4", "api_key": "{MOCK_OPENAI_KEY}"}}')
 

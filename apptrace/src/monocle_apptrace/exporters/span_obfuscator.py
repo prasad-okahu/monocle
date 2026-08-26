@@ -145,23 +145,43 @@ _PLACEHOLDER = re.compile(r"^<[A-Z_]+>$")
 _AUTH_SCHEMES = frozenset({"bearer", "basic", "digest", "token", "apikey"})
 
 
+# Sentence punctuation an unquoted value runs into, since the value pattern stops
+# only at whitespace and , ; } quotes.
+_TRAILING_PUNCTUATION = ".:!?"
+
+
 def _redact_credential_assignment(match: "re.Match") -> str:
     """Redact the value of an ``api_key: ...`` style assignment.
 
-    Preserves the quotes around the value so redacting a secret inside a JSON
-    payload leaves the payload parseable, and leaves the match alone when a more
-    specific pattern already replaced the value -- so
-    ``Authorization: Bearer <TOKEN>`` keeps its precise marker instead of
-    degrading to ``Authorization: <REDACTED>``.
+    Keeps the quotes around a quoted value so redacting a secret inside a JSON
+    payload leaves it parseable, keeps sentence punctuation that an unquoted
+    value ran into, and leaves the match alone when a more specific pattern
+    already replaced the value -- so ``Authorization: Bearer <TOKEN>`` keeps its
+    precise marker instead of degrading to ``Authorization: <REDACTED>``.
     """
     prefix, value = match.group(1), match.group(2)
-    bare = value.strip("\"'")
-    if _PLACEHOLDER.match(bare) or bare.lower() in _AUTH_SCHEMES:
-        return match.group(0)
+
     if len(value) >= 2 and value[0] in "\"'" and value[-1] == value[0]:
         quote = value[0]
+        if _is_already_handled(value.strip("\"'")):
+            return match.group(0)
         return f"{prefix}{quote}<REDACTED>{quote}"
-    return f"{prefix}<REDACTED>"
+
+    value, trailing = _split_trailing_punctuation(value)
+    if not value or _is_already_handled(value):
+        return match.group(0)
+    return f"{prefix}<REDACTED>{trailing}"
+
+
+def _is_already_handled(value: str) -> bool:
+    """True if *value* is a redaction placeholder or a bare auth scheme keyword."""
+    return bool(_PLACEHOLDER.match(value)) or value.lower() in _AUTH_SCHEMES
+
+
+def _split_trailing_punctuation(value: str) -> tuple:
+    """Split trailing sentence punctuation off *value*."""
+    stripped = value.rstrip(_TRAILING_PUNCTUATION)
+    return stripped, value[len(stripped):]
 
 
 # Ordered so that specific credential shapes are redacted before the generic
