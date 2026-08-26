@@ -116,7 +116,7 @@ class TestRequestBody:
     def test_posts_to_the_report_path(self, post):
         _queue(post, {"results": []})
 
-        OkahuEval.get_test_cases(**WINDOW, expected_eval=EVAL)
+        OkahuEval.get_test_cases(**WINDOW, check_eval=EVAL)
 
         assert post["calls"][0]["url"] == (
             "https://api.example/api/v1/workflows/wf/evals/report")
@@ -124,14 +124,14 @@ class TestRequestBody:
     def test_sends_the_api_key(self, post):
         _queue(post, {"results": []})
 
-        OkahuEval.get_test_cases(**WINDOW, expected_eval=EVAL)
+        OkahuEval.get_test_cases(**WINDOW, check_eval=EVAL)
 
         assert post["calls"][0]["headers"]["x-api-key"] == "test-key"
 
     def test_body_carries_the_required_window(self, post):
         _queue(post, {"results": []})
 
-        OkahuEval.get_test_cases(**WINDOW, expected_eval=EVAL)
+        OkahuEval.get_test_cases(**WINDOW, check_eval=EVAL)
 
         body = post["calls"][0]["body"]
         assert body["fact_name"] == "traces"
@@ -143,35 +143,35 @@ class TestRequestBody:
         traces get_trace_ids already found rather than re-discovering them."""
         _queue(post, {"results": []})
 
-        OkahuEval.get_test_cases(**WINDOW, expected_eval=EVAL)
+        OkahuEval.get_test_cases(**WINDOW, check_eval=EVAL)
 
         assert post["calls"][0]["body"]["fact_ids"] == TRACE_IDS
 
     def test_category_defaults_to_llm(self, post):
         _queue(post, {"results": []})
 
-        OkahuEval.get_test_cases(**WINDOW, expected_eval=EVAL)
+        OkahuEval.get_test_cases(**WINDOW, check_eval=EVAL)
 
         assert post["calls"][0]["body"]["category"] == ["llm"]
 
     def test_category_string_is_wrapped(self, post):
         _queue(post, {"results": []})
 
-        OkahuEval.get_test_cases(**WINDOW, expected_eval=EVAL, category="manual")
+        OkahuEval.get_test_cases(**WINDOW, check_eval=EVAL, category="manual")
 
         assert post["calls"][0]["body"]["category"] == ["manual"]
 
     def test_category_list_passes_through(self, post):
         _queue(post, {"results": []})
 
-        OkahuEval.get_test_cases(**WINDOW, expected_eval=EVAL, category=["llm", "manual"])
+        OkahuEval.get_test_cases(**WINDOW, check_eval=EVAL, category=["llm", "manual"])
 
         assert post["calls"][0]["body"]["category"] == ["llm", "manual"]
 
     def test_fact_name_is_mapped_to_the_okahu_name(self, post):
         _queue(post, {"results": []})
 
-        OkahuEval.get_test_cases(**WINDOW, expected_eval=EVAL, fact_name="agentic_turns")
+        OkahuEval.get_test_cases(**WINDOW, check_eval=EVAL, fact_name="agentic_turns")
 
         assert post["calls"][0]["body"]["fact_name"] == "agent_requests"
 
@@ -185,18 +185,18 @@ class TestRequestBody:
     def test_eval_name_becomes_a_one_item_eval_names(self, post):
         _queue(post, {"results": []})
 
-        OkahuEval.get_test_cases(**WINDOW, expected_eval="hallucination")
+        OkahuEval.get_test_cases(**WINDOW, check_eval="hallucination")
 
         assert post["calls"][0]["body"]["eval_names"] == ["hallucination"]
 
     def test_custom_eval_name_is_rejected(self, post):
         with pytest.raises(ValueError, match="custom"):
-            OkahuEval.get_test_cases(**WINDOW, expected_eval="custom")
+            OkahuEval.get_test_cases(**WINDOW, check_eval="custom")
 
     def test_page_size_is_sent(self, post):
         _queue(post, {"results": []})
 
-        OkahuEval.get_test_cases(**WINDOW, expected_eval=EVAL, page_size=250)
+        OkahuEval.get_test_cases(**WINDOW, check_eval=EVAL, page_size=250)
 
         assert post["calls"][0]["body"]["page_size"] == 250
 
@@ -210,7 +210,7 @@ class TestPagination:
                 "next_page_token": "tok-2"},
                {"results": [_row("bbb", "hallucination", "major")]})
 
-        cases = OkahuEval.get_test_cases(**WINDOW, expected_eval=EVAL)
+        cases = OkahuEval.get_test_cases(**WINDOW, check_eval=EVAL)
 
         assert len(post["calls"]) == 2
         assert post["calls"][1]["body"]["page_token"] == "tok-2"
@@ -219,7 +219,7 @@ class TestPagination:
     def test_stops_when_no_next_page_token(self, post):
         _queue(post, {"results": [_row("aaa", "hallucination", "minor")]})
 
-        OkahuEval.get_test_cases(**WINDOW, expected_eval=EVAL)
+        OkahuEval.get_test_cases(**WINDOW, check_eval=EVAL)
 
         assert len(post["calls"]) == 1
 
@@ -227,7 +227,7 @@ class TestPagination:
         _queue(post, {"results": [_row("aaa", "hallucination", "minor")],
                       "next_page_token": ""})
 
-        OkahuEval.get_test_cases(**WINDOW, expected_eval=EVAL)
+        OkahuEval.get_test_cases(**WINDOW, check_eval=EVAL)
 
         assert len(post["calls"]) == 1
 
@@ -238,7 +238,7 @@ class TestMapping:
     def test_one_case_per_fact_with_a_factid_input(self, post):
         _queue(post, {"results": [_row("aaa", "hallucination", "minor_hallucination")]})
 
-        cases = OkahuEval.get_test_cases(**WINDOW, expected_eval=EVAL)
+        cases = OkahuEval.get_test_cases(**WINDOW, check_eval=EVAL)
 
         assert cases == [FluentTestCase(
             name="aaa",
@@ -249,7 +249,7 @@ class TestMapping:
         _queue(post, {"results": [_row("aaa", "hallucination", "minor"),
                                   _row("aaa", "sentiment", "positive")]})
 
-        cases = OkahuEval.get_test_cases(**WINDOW, expected_eval=EVAL)
+        cases = OkahuEval.get_test_cases(**WINDOW, check_eval=EVAL)
 
         assert len(cases) == 1
         assert cases[0].evals == [Eval(name="hallucination", result="minor"),
@@ -259,14 +259,14 @@ class TestMapping:
         _queue(post, {"results": [_row("aaa", "hallucination", "minor"),
                                   _row("bbb", "hallucination", "major")]})
 
-        cases = OkahuEval.get_test_cases(**WINDOW, expected_eval=EVAL)
+        cases = OkahuEval.get_test_cases(**WINDOW, check_eval=EVAL)
 
         assert [c.name for c in cases] == ["aaa", "bbb"]
 
     def test_fact_id_is_normalized_to_bare_hex(self, post):
         _queue(post, {"results": [_row("0xaaa", "hallucination", "minor")]})
 
-        cases = OkahuEval.get_test_cases(**WINDOW, expected_eval=EVAL)
+        cases = OkahuEval.get_test_cases(**WINDOW, check_eval=EVAL)
 
         assert cases[0].input.fact_id == "aaa"
 
@@ -274,14 +274,14 @@ class TestMapping:
         """The body is sent the mapped name; the FactID keeps the caller's."""
         _queue(post, {"results": [_row("aaa", "hallucination", "minor")]})
 
-        cases = OkahuEval.get_test_cases(**WINDOW, expected_eval=EVAL, fact_name="agentic_turns")
+        cases = OkahuEval.get_test_cases(**WINDOW, check_eval=EVAL, fact_name="agentic_turns")
 
         assert cases[0].input.fact_name == "agentic_turns"
 
     def test_falls_back_to_latest_when_no_authoritative(self, post):
         _queue(post, {"results": [_row("aaa", "hallucination", latest_label="major")]})
 
-        cases = OkahuEval.get_test_cases(**WINDOW, expected_eval=EVAL)
+        cases = OkahuEval.get_test_cases(**WINDOW, check_eval=EVAL)
 
         assert cases[0].evals == [Eval(name="hallucination", result="major")]
 
@@ -289,7 +289,7 @@ class TestMapping:
         _queue(post, {"results": [_row("aaa", "hallucination", "minor",
                                        latest_label="major")]})
 
-        cases = OkahuEval.get_test_cases(**WINDOW, expected_eval=EVAL)
+        cases = OkahuEval.get_test_cases(**WINDOW, check_eval=EVAL)
 
         assert cases[0].evals == [Eval(name="hallucination", result="minor")]
 
@@ -297,7 +297,7 @@ class TestMapping:
         _queue(post, {"results": [_row("aaa", "hallucination", "minor"),
                                   _row("aaa", "sentiment")]})
 
-        cases = OkahuEval.get_test_cases(**WINDOW, expected_eval=EVAL)
+        cases = OkahuEval.get_test_cases(**WINDOW, check_eval=EVAL)
 
         assert cases[0].evals == [Eval(name="hallucination", result="minor")]
 
@@ -305,18 +305,18 @@ class TestMapping:
         """An empty evals list would raise in check_eval -- emit nothing instead."""
         _queue(post, {"results": [_row("aaa", "hallucination")]})
 
-        assert OkahuEval.get_test_cases(**WINDOW, expected_eval=EVAL) == []
+        assert OkahuEval.get_test_cases(**WINDOW, check_eval=EVAL) == []
 
     def test_eval_not_found_row_is_skipped(self, post):
         _queue(post, {"results": [_row("aaa", "hallucination", "minor",
                                        eval_found=False)]})
 
-        assert OkahuEval.get_test_cases(**WINDOW, expected_eval=EVAL) == []
+        assert OkahuEval.get_test_cases(**WINDOW, check_eval=EVAL) == []
 
     def test_no_results_gives_no_cases(self, post):
         _queue(post, {"results": []})
 
-        assert OkahuEval.get_test_cases(**WINDOW, expected_eval=EVAL) == []
+        assert OkahuEval.get_test_cases(**WINDOW, check_eval=EVAL) == []
 
 
 @pytest.mark.usefixtures("stub_traces")
@@ -325,21 +325,21 @@ class TestFluentEntryPoint:
     def test_delegates_to_okahu(self, post):
         _queue(post, {"results": [_row("aaa", "hallucination", "minor")]})
 
-        cases = get_test_cases(source="okahu", expected_eval=EVAL, **WINDOW)
+        cases = get_test_cases(source="okahu", check_eval=EVAL, **WINDOW)
 
         assert [c.name for c in cases] == ["aaa"]
 
     def test_eval_name_is_forwarded(self, post):
         _queue(post, {"results": []})
 
-        get_test_cases(source="okahu", expected_eval="hallucination", **WINDOW)
+        get_test_cases(source="okahu", check_eval="hallucination", **WINDOW)
 
         assert post["calls"][0]["body"]["eval_names"] == ["hallucination"]
 
     def test_defaults_to_okahu(self, post):
         _queue(post, {"results": []})
 
-        get_test_cases(expected_eval=EVAL, **WINDOW)
+        get_test_cases(check_eval=EVAL, **WINDOW)
 
         assert post["calls"][0]["url"].endswith("/evals/report")
 
@@ -411,7 +411,7 @@ class TestLiveResponseShape:
         _queue(post, self.LIVE_RESPONSE)
 
         cases = OkahuEval.get_test_cases(**WINDOW, category=["manual", "llm"],
-                                         expected_eval="user_input_validity")
+                                         check_eval="user_input_validity")
 
         assert cases == [FluentTestCase(
             name="9ade6084ba144b138090d64d1a082450",
@@ -422,7 +422,7 @@ class TestLiveResponseShape:
     def test_null_next_page_token_stops_paging(self, post):
         _queue(post, self.LIVE_RESPONSE)
 
-        OkahuEval.get_test_cases(**WINDOW, expected_eval=EVAL)
+        OkahuEval.get_test_cases(**WINDOW, check_eval=EVAL)
 
         assert len(post["calls"]) == 1
 
@@ -431,7 +431,7 @@ class TestLiveResponseShape:
         del row["authoritative"]
         _queue(post, {**self.LIVE_RESPONSE, "results": [row]})
 
-        cases = OkahuEval.get_test_cases(**WINDOW, expected_eval=EVAL)
+        cases = OkahuEval.get_test_cases(**WINDOW, check_eval=EVAL)
 
         assert cases[0].evals == [Eval(name="user_input_validity", result="valid")]
 
@@ -451,7 +451,7 @@ class TestEmptyEndpointFallsBackToProd:
         monkeypatch.setenv("OKAHU_API_ENDPOINT", "")
         _queue(post, {"results": []})
 
-        OkahuEval.get_test_cases(**WINDOW, expected_eval=EVAL)
+        OkahuEval.get_test_cases(**WINDOW, check_eval=EVAL)
 
         assert post["calls"][0]["url"] == (
             "https://api.okahu.co/api/v1/workflows/wf/evals/report")
@@ -460,7 +460,7 @@ class TestEmptyEndpointFallsBackToProd:
         monkeypatch.delenv("OKAHU_API_ENDPOINT", raising=False)
         _queue(post, {"results": []})
 
-        OkahuEval.get_test_cases(**WINDOW, expected_eval=EVAL)
+        OkahuEval.get_test_cases(**WINDOW, check_eval=EVAL)
 
         assert post["calls"][0]["url"].startswith("https://api.okahu.co/api/")
 
@@ -468,7 +468,7 @@ class TestEmptyEndpointFallsBackToProd:
         monkeypatch.setenv("OKAHU_API_ENDPOINT", "https://api-stage.okahu.co")
         _queue(post, {"results": []})
 
-        OkahuEval.get_test_cases(**WINDOW, expected_eval=EVAL)
+        OkahuEval.get_test_cases(**WINDOW, check_eval=EVAL)
 
         assert post["calls"][0]["url"].startswith("https://api-stage.okahu.co/api/")
 
@@ -556,7 +556,7 @@ class TestLocalSource:
         """Discover -> dump -> load must produce an equal set of cases."""
         _queue(post, {"results": [_row("aaa", "hallucination", "minor_hallucination"),
                                   _row("bbb", "sentiment", "positive")]})
-        discovered = OkahuEval.get_test_cases(**WINDOW, expected_eval=EVAL)
+        discovered = OkahuEval.get_test_cases(**WINDOW, check_eval=EVAL)
         path = self._write(tmp_path, [c.model_dump() for c in discovered])
 
         assert get_test_cases(source="local", path=path) == discovered
@@ -659,7 +659,7 @@ class TestTraceIdEnumeration:
     def test_report_receives_the_fact_ids(self, traces, post):
         _queue(post, {"results": [_row("aaa", "hallucination", "minor")]})
 
-        OkahuEval.get_test_cases(**WINDOW, expected_eval="hallucination")
+        OkahuEval.get_test_cases(**WINDOW, check_eval="hallucination")
 
         assert post["calls"][0]["body"]["fact_ids"] == ["aaa", "bbb"]
         assert post["calls"][0]["body"]["eval_names"] == ["hallucination"]
@@ -668,7 +668,7 @@ class TestTraceIdEnumeration:
         _queue(post, {"results": [_row("aaa", "hallucination", "minor"),
                                   _row("bbb", "hallucination", "major")]})
 
-        cases = OkahuEval.get_test_cases(**WINDOW, expected_eval="hallucination")
+        cases = OkahuEval.get_test_cases(**WINDOW, check_eval="hallucination")
 
         assert [(c.name, c.evals[0].result) for c in cases] == [
             ("aaa", "minor"), ("bbb", "major")]
@@ -676,7 +676,7 @@ class TestTraceIdEnumeration:
     def test_a_trace_with_no_labelled_eval_is_dropped(self, traces, post):
         _queue(post, {"results": [_row("aaa", "hallucination", "minor")]})
 
-        cases = OkahuEval.get_test_cases(**WINDOW, expected_eval="hallucination")
+        cases = OkahuEval.get_test_cases(**WINDOW, check_eval="hallucination")
 
         assert [c.name for c in cases] == ["aaa"]
 
@@ -686,14 +686,14 @@ class TestTraceIdEnumeration:
                                   _row("ccc", "hallucination", "minor"),
                                   _row("bbb", "hallucination", "minor")]})
 
-        cases = OkahuEval.get_test_cases(**WINDOW, expected_eval="hallucination")
+        cases = OkahuEval.get_test_cases(**WINDOW, check_eval="hallucination")
 
         assert [c.name for c in cases] == ["ccc", "aaa", "bbb"]
 
     def test_no_traces_gives_no_cases_and_no_report_call(self, traces, post):
         traces["ids"] = []
 
-        assert OkahuEval.get_test_cases(**WINDOW, expected_eval="hallucination") == []
+        assert OkahuEval.get_test_cases(**WINDOW, check_eval="hallucination") == []
         assert post["calls"] == []
 
 
@@ -822,7 +822,7 @@ class TestPopulatedFromSpans:
         _queue(post, {"results": [_row("aaa", "hallucination", "minor"),
                                   _row("bbb", "hallucination", "major")]})
 
-        cases = OkahuEval.get_test_cases(**WINDOW, expected_eval=EVAL)
+        cases = OkahuEval.get_test_cases(**WINDOW, check_eval=EVAL)
 
         assert cases[0].evals == [Eval(name="hallucination", result="minor")]
         assert [a.name for a in cases[0].agents] == self.AGENTS
@@ -983,7 +983,7 @@ class TestNonTraceFactLevel:
                                   _row("e-bbb", "hallucination", "major")]})
 
         cases = OkahuEval.get_test_cases(**WINDOW, fact_name="agentic_turns",
-                                         expected_eval=EVAL)
+                                         check_eval=EVAL)
 
         assert post["calls"][0]["body"]["fact_ids"] == ["e-aaa", "e-bbb"]
         assert cases[0].evals == [Eval(name="hallucination", result="minor")]
@@ -1113,7 +1113,7 @@ class TestEvalFilterThreading:
 
 
 class TestFiltersAreIndependent:
-    """eval_filter narrows the lookup; expected_eval drives the report.
+    """eval_filter narrows the lookup; check_eval drives the report.
 
     They were one parameter and are now two, because narrowing which facts to
     consider and asking what an eval said about them are different questions --
@@ -1141,10 +1141,10 @@ class TestFiltersAreIndependent:
         assert post["calls"] == []
         assert [c.name for c in cases] == ["aaa"]
 
-    def test_expected_alone_reports_but_does_not_narrow(self, okahu, post):
+    def test_check_eval_alone_reports_but_does_not_narrow(self, okahu, post):
         _queue(post, {"results": [_row("aaa", "hallucination", "minor")]})
 
-        cases = OkahuEval.get_test_cases(**WINDOW, expected_eval="hallucination")
+        cases = OkahuEval.get_test_cases(**WINDOW, check_eval="hallucination")
 
         assert okahu["trace_calls"][0]["eval_filter"] is None
         assert post["calls"][0]["body"]["eval_names"] == ["hallucination"]
@@ -1154,7 +1154,7 @@ class TestFiltersAreIndependent:
         _queue(post, {"results": [_row("aaa", "bias", "biased")]})
 
         cases = OkahuEval.get_test_cases(**WINDOW, eval_filter="frustration:ok",
-                                         expected_eval="bias")
+                                         check_eval="bias")
 
         assert okahu["trace_calls"][0]["eval_filter"] == "frustration:ok"
         assert post["calls"][0]["body"]["eval_names"] == ["bias"]
@@ -1167,18 +1167,72 @@ class TestFiltersAreIndependent:
         assert post["calls"] == []
         assert cases[0].evals == []
 
-    def test_only_expected_eval_drops_unlabelled_facts(self, okahu, post):
+    def test_only_check_eval_drops_unlabelled_facts(self, okahu, post):
         """The drop rule follows the report, so a bare filter never drops."""
         _queue(post, {"results": []})
 
-        assert OkahuEval.get_test_cases(**WINDOW, expected_eval="hallucination") == []
+        assert OkahuEval.get_test_cases(**WINDOW, check_eval="hallucination") == []
         assert len(OkahuEval.get_test_cases(**WINDOW, eval_filter="hallucination")) == 1
 
-    def test_custom_is_rejected_for_expected_not_for_filter(self, okahu, post):
+    def test_custom_is_rejected_for_check_eval_not_for_filter(self, okahu, post):
         """"custom" is a template name the report cannot resolve; as a query
         filter it is just a string."""
         with pytest.raises(ValueError, match="custom"):
-            OkahuEval.get_test_cases(**WINDOW, expected_eval="custom")
+            OkahuEval.get_test_cases(**WINDOW, check_eval="custom")
 
         OkahuEval.get_test_cases(**WINDOW, eval_filter="custom")
         assert okahu["trace_calls"][-1]["eval_filter"] == "custom"
+
+
+class TestCheckEvalModes:
+    """check_eval is a switch or a name: True means every eval, a string means one."""
+
+    @pytest.fixture(name="okahu")
+    def okahu_fixture(self, monkeypatch):
+        from monocle_test_tools.okahu_span_loader import OkahuSpanLoader
+
+        monkeypatch.setattr(OkahuSpanLoader, "get_trace_ids",
+                            staticmethod(lambda *a, **k: ["aaa"]))
+        monkeypatch.setattr(OkahuSpanLoader, "get_spans", staticmethod(lambda *a, **k: []))
+
+    def test_true_reports_every_eval(self, okahu, post):
+        """No eval_names in the body means all of them supported for the fact."""
+        _queue(post, {"results": [_row("aaa", "hallucination", "minor"),
+                                  _row("aaa", "bias", "biased")]})
+
+        cases = OkahuEval.get_test_cases(**WINDOW, check_eval=True)
+
+        assert "eval_names" not in post["calls"][0]["body"]
+        assert cases[0].evals == [Eval(name="hallucination", result="minor"),
+                                  Eval(name="bias", result="biased")]
+
+    def test_a_string_reports_only_that_eval(self, okahu, post):
+        _queue(post, {"results": [_row("aaa", "hallucination", "minor")]})
+
+        OkahuEval.get_test_cases(**WINDOW, check_eval="hallucination")
+
+        assert post["calls"][0]["body"]["eval_names"] == ["hallucination"]
+
+    def test_false_makes_no_report_call(self, okahu, post):
+        cases = OkahuEval.get_test_cases(**WINDOW, check_eval=False)
+
+        assert post["calls"] == []
+        assert cases[0].evals == []
+
+    def test_omitted_makes_no_report_call(self, okahu, post):
+        cases = OkahuEval.get_test_cases(**WINDOW)
+
+        assert post["calls"] == []
+        assert cases[0].evals == []
+
+    def test_true_still_drops_a_fact_with_no_evals_at_all(self, okahu, post):
+        _queue(post, {"results": []})
+
+        assert OkahuEval.get_test_cases(**WINDOW, check_eval=True) == []
+
+    def test_false_never_drops(self, okahu, post):
+        assert len(OkahuEval.get_test_cases(**WINDOW, check_eval=False)) == 1
+
+    def test_custom_is_still_rejected(self, okahu, post):
+        with pytest.raises(ValueError, match="custom"):
+            OkahuEval.get_test_cases(**WINDOW, check_eval="custom")

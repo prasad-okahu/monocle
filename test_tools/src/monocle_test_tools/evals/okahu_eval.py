@@ -72,7 +72,7 @@ class OkahuEval(BaseEval):
                        fact_name: str = "traces",
                        category: Union[str, list] = "llm",
                        eval_filter: Optional[str] = None,
-                       expected_eval: Optional[str] = None,
+                       check_eval: Optional[Union[bool, str]] = None,
                        page_size: int = 100) -> list:
         """Build FluentTestCases from the traces recorded for a workflow.
 
@@ -89,7 +89,7 @@ class OkahuEval(BaseEval):
 
         Either way the spans are read by ``FluentTestCase.from_spans``, which
         fills in the agents invoked, the tools they called and the tokens
-        consumed. Finally, only when ``expected_eval`` is given,
+        consumed. Finally, only when ``check_eval`` is set,
         ``/v1/workflows/{workflow_name}/evals/report`` is asked about exactly those
         traces (``fact_ids``) and that eval, and the labels it returns become each
         case's expected results.
@@ -106,7 +106,7 @@ class OkahuEval(BaseEval):
         absence of fact_ids is what selects discovery -- so it reports on traces
         already enumerated rather than re-discovering them.
 
-        Without ``expected_eval`` no report call is made at all and the cases
+        Without ``check_eval`` no report call is made at all and the cases
         carry no evals -- still fully described otherwise, and ready for
         ``run_agent(testcase=...)`` to replay. With one, a fact that has no
         labelled result for that eval is
@@ -142,8 +142,10 @@ class OkahuEval(BaseEval):
                 considered at all -- passed to the fact/trace lookups as a query
                 param. A bare eval name, or the API's ``name:label;name:label``
                 form. Does not by itself cause any eval to be reported.
-            expected_eval: The eval to report on. When set, /evals/report is
-                asked about it and its labels become each case's expected
+            check_eval: Which evals to report on, as a switch or a name.
+                ``True`` reports every eval recorded for the fact level, a
+                string reports only that one, and ``False``/omitted makes no
+                report call at all. The labels become each case's expected
                 results. ``"custom"`` is rejected: the report resolves a stored
                 template by name and custom templates are not stored.
             page_size: Rows per page (server max 1000).
@@ -152,7 +154,7 @@ class OkahuEval(BaseEval):
             One FluentTestCase per fact that has at least one labelled eval.
 
         Raises:
-            ValueError: If expected_eval is "custom", or fact_name is not
+            ValueError: If check_eval is "custom", or fact_name is not
                 recognized.
             AssertionError: If the report service cannot be reached or errors.
         """
@@ -163,9 +165,9 @@ class OkahuEval(BaseEval):
         from monocle_test_tools.schema import FactID
         from monocle_test_tools.testcase import FluentTestCase
 
-        if expected_eval == "custom":
+        if check_eval == "custom":
             raise ValueError(
-                "expected_eval='custom' is not supported; the report resolves a "
+                "check_eval='custom' is not supported; the report resolves a "
                 "stored template by name and custom templates are not stored.")
 
         from monocle_test_tools.okahu_span_loader import OkahuSpanLoader
@@ -186,17 +188,20 @@ class OkahuEval(BaseEval):
             return []
 
         evals_by_fact = {}
-        if expected_eval:
+        if check_eval:
+            # A string names one eval; True asks for every eval the fact level
+            # supports, which the report expresses by omitting eval_names.
             evals_by_fact = cls._eval_report_by_fact(
                 workflow_name=workflow_name, fact_ids=fact_ids,
                 fact_name=mapped_fact_name, start_time=start_time,
-                end_time=end_time, category=category, eval_name=expected_eval,
+                end_time=end_time, category=category,
+                eval_name=check_eval if isinstance(check_eval, str) else None,
                 page_size=page_size)
 
         test_cases = []
         for fact_id in fact_ids:
             evals = evals_by_fact.get(fact_id, [])
-            if expected_eval and not evals:
+            if check_eval and not evals:
                 # Asked for a specific eval and this trace has no labelled result
                 # for it. An empty evals list raises in check_eval, so emitting the
                 # case would poison the suite it is meant to feed.
@@ -217,7 +222,7 @@ class OkahuEval(BaseEval):
         dropped = len(fact_ids) - len(test_cases)
         if dropped:
             logger.info("get_test_cases: %d of %d facts had no labelled '%s' eval "
-                        "and were dropped", dropped, len(fact_ids), expected_eval)
+                        "and were dropped", dropped, len(fact_ids), check_eval)
         return test_cases
 
     @classmethod
@@ -251,6 +256,9 @@ class OkahuEval(BaseEval):
         Sends fact_ids, which takes /evals/report OUT of discovery mode -- the
         absence of fact_ids is what selects discovery -- so this reports on the
         traces already enumerated rather than re-discovering them.
+
+        ``eval_name`` of None asks for every eval the fact level supports, which
+        the API expresses the same way: by omitting ``eval_names``.
         """
         from monocle_test_tools.evals.okahu_filtered_eval import (OkahuFilteredEval,
                                                                   normalize_fact_id)
@@ -263,8 +271,9 @@ class OkahuEval(BaseEval):
             "end_time": end_time,
             "category": [category] if isinstance(category, str) else list(category),
             "page_size": page_size,
-            "eval_names": [eval_name],
         }
+        if eval_name:
+            body["eval_names"] = [eval_name]
         client = OkahuFilteredEval.from_env()
         url = f"{client.api_base}/v1/workflows/{workflow_name}/evals/report"
 
