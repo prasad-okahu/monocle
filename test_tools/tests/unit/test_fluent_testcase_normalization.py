@@ -113,3 +113,70 @@ def test_round_trips_through_dump():
     })
 
     assert FluentTestCase.model_validate(original.model_dump()) == original
+
+
+class TestEvalCategory:
+    """An eval may name a category, written into the key as "<name>@<category>"."""
+
+    def test_a_categorised_key_splits(self):
+        assert Eval.model_validate({"hallucination@llm": "minor"}) == Eval(
+            name="hallucination", category="llm", result="minor")
+
+    def test_an_uncategorised_key_is_unchanged(self):
+        tc = Eval.model_validate({"hallucination": "minor"})
+
+        assert tc.name == "hallucination"
+        assert tc.category is None
+
+    def test_a_bare_categorised_string(self):
+        assert Eval.model_validate("hallucination@manual") == Eval(
+            name="hallucination", category="manual")
+
+    def test_the_flat_form_still_works(self):
+        assert Eval.model_validate(
+            {"name": "hallucination", "category": "llm", "result": "minor"}
+        ) == Eval(name="hallucination", category="llm", result="minor")
+
+    def test_serializes_with_the_category_in_the_key(self):
+        assert Eval(name="hallucination", category="llm",
+                    result="minor").model_dump() == {"hallucination@llm": "minor"}
+
+    def test_serializes_without_one_when_absent(self):
+        assert Eval(name="hallucination",
+                    result="minor").model_dump() == {"hallucination": "minor"}
+
+    @pytest.mark.parametrize("payload", [
+        {"hallucination@llm": "minor"},
+        {"hallucination": "minor"},
+    ])
+    def test_round_trips(self, payload):
+        once = Eval.model_validate(payload)
+
+        assert Eval.model_validate(once.model_dump()) == once
+
+    def test_only_the_last_at_separates(self):
+        """An eval name may itself contain @; the category is what follows the last."""
+        assert Eval.model_validate({"a@b@llm": "minor"}) == Eval(
+            name="a@b", category="llm", result="minor")
+
+    def test_an_empty_category_is_no_category(self):
+        tc = Eval.model_validate({"hallucination@": "minor"})
+
+        assert tc.name == "hallucination"
+        assert tc.category is None
+
+    def test_a_path_name_is_not_split(self):
+        """A custom-template path is a name, not a name@category pair."""
+        from pathlib import Path
+
+        tc = Eval.model_validate(Path("./evals/my@eval.json"))
+
+        assert tc.name == Path("./evals/my@eval.json")
+        assert tc.category is None
+
+    def test_works_through_the_testcase_mapping_form(self):
+        tc = FluentTestCase.model_validate({
+            "evals": {"hallucination@llm": "minor", "bias@manual": "biased"}})
+
+        assert tc.evals == [Eval(name="hallucination", category="llm", result="minor"),
+                            Eval(name="bias", category="manual", result="biased")]

@@ -70,7 +70,7 @@ class OkahuEval(BaseEval):
     @classmethod
     def get_test_cases(cls, *, workflow_name: str, start_time: str, end_time: str,
                        fact_name: str = "traces",
-                       category: Union[str, list] = ["llm", "manual"],
+                       category: Union[str, list] = "llm",
                        eval_filter: Optional[str] = None,
                        expected_eval: Optional[str] = None,
                        page_size: int = 100) -> list:
@@ -135,9 +135,9 @@ class OkahuEval(BaseEval):
             end_time: Window end. Required.
             fact_name: User-facing fact level, mapped to the Okahu name for the
                 request. The returned FactIDs keep the user-facing name.
-            category: Which eval runs to consider -- ``"llm"``, ``"manual"`` or
-                ``"test"``, or a list of them; defaults to ``["llm", "manual"]``.
-                A bare string is wrapped, so this is always sent as a list.
+            category: Which eval runs to consider -- ``"llm"`` (the default),
+                ``"manual"`` or ``"test"``, or a list of them. A bare string is
+                wrapped, so this is always sent as a list.
             eval_filter: Optional ``eval`` filter narrowing which facts are
                 considered at all -- passed to the fact/trace lookups as a query
                 param. A bare eval name, or the API's ``name:label;name:label``

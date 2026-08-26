@@ -78,32 +78,55 @@ class Eval(BaseModel):
     """An eval to run, written as ``{"<name>": "<result>"}``.
 
     The eval name is the key and its expected result is the value, so the body is
-    a single level. The flat form (``{"name": ..., "result": ...}``) and a bare
-    name string are also accepted on input.
+    a single level. A category is carried in the key too, as
+    ``{"<name>@<category>": "<result>"}`` -- so ``hallucination@llm`` is the
+    ``hallucination`` eval in the ``llm`` category. The flat form
+    (``{"name": ..., "category": ..., "result": ...}``) and a bare name string
+    are also accepted on input.
     """
     model_config = ConfigDict(extra="forbid")
 
     name: Union[str, Path] = Field(None, description= " Eval name")
+    category: Optional[str] = Field(None, description="Eval category")
     result: str = Field(None, description="Eval result")
+
+    @staticmethod
+    def _split_category(name: Any) -> Tuple[Any, Optional[str]]:
+        """Split ``"<name>@<category>"`` into its parts.
+
+        Only strings split, and only on the LAST ``@`` -- an eval name may
+        contain one. A Path is a custom-template location, never a
+        name@category pair, so it is returned whole. A trailing ``@`` names no
+        category rather than an empty one.
+        """
+        if not isinstance(name, str) or "@" not in name:
+            return name, None
+        head, _, category = name.rpartition("@")
+        if not head or not category:
+            return name.rstrip("@") or name, None
+        return head, category
 
     @model_validator(mode="before")
     @classmethod
     def _from_keyed_form(cls, data: Any) -> Any:
         """Turn ``{"<name>": <result>}`` (or a bare name) into the model's own fields."""
         if isinstance(data, (str, Path)):
-            return {"name": data}
+            name, category = cls._split_category(data)
+            return {"name": name, "category": category}
         entry = _keyed_entry(cls, data)
         if entry is None:
             return data
         name, result = entry
         if isinstance(result, dict):
             raise ValueError(f'eval "{name}" must map to a result value, not an object')
-        return {"name": name, "result": result}
+        name, category = cls._split_category(name)
+        return {"name": name, "category": category, "result": result}
 
     @model_serializer(mode="wrap")
     def _to_keyed_form(self, handler) -> dict:
         body = handler(self)
-        return {body.get("name"): body.get("result")}
+        name, category = body.get("name"), body.get("category")
+        return {f"{name}@{category}" if category else name: body.get("result")}
 
 def _as_keyed_list(model: type[BaseModel], value: Any) -> Any:
     """Normalize the mapping form of a keyed-entry list field into a list.

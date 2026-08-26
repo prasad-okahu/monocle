@@ -147,12 +147,12 @@ class TestRequestBody:
 
         assert post["calls"][0]["body"]["fact_ids"] == TRACE_IDS
 
-    def test_category_defaults_to_llm_and_manual(self, post):
+    def test_category_defaults_to_llm(self, post):
         _queue(post, {"results": []})
 
         OkahuEval.get_test_cases(**WINDOW, expected_eval=EVAL)
 
-        assert post["calls"][0]["body"]["category"] == ["llm", "manual"]
+        assert post["calls"][0]["body"]["category"] == ["llm"]
 
     def test_category_string_is_wrapped(self, post):
         _queue(post, {"results": []})
