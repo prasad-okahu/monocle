@@ -71,7 +71,8 @@ class OkahuEval(BaseEval):
     def get_test_cases(cls, *, workflow_name: str, start_time: str, end_time: str,
                        fact_name: str = "traces",
                        category: Union[str, list] = ["llm", "manual"],
-                       eval_name: Optional[str] = None,
+                       eval_filter: Optional[str] = None,
+                       expected_eval: Optional[str] = None,
                        page_size: int = 100) -> list:
         """Build FluentTestCases from the traces recorded for a workflow.
 
@@ -88,7 +89,7 @@ class OkahuEval(BaseEval):
 
         Either way the spans are read by ``FluentTestCase.from_spans``, which
         fills in the agents invoked, the tools they called and the tokens
-        consumed. Finally, only when ``eval_name`` is given,
+        consumed. Finally, only when ``expected_eval`` is given,
         ``/v1/workflows/{workflow_name}/evals/report`` is asked about exactly those
         traces (``fact_ids``) and that eval, and the labels it returns become each
         case's expected results.
@@ -105,9 +106,9 @@ class OkahuEval(BaseEval):
         absence of fact_ids is what selects discovery -- so it reports on traces
         already enumerated rather than re-discovering them.
 
-        Without ``eval_name`` no report call is made at all and the cases carry no
-        evals -- still fully described otherwise, and ready for
-        ``run_agent(testcase=...)`` to replay. With one, a trace that has no
+        Without ``expected_eval`` no report call is made at all and the cases
+        carry no evals -- still fully described otherwise, and ready for
+        ``run_agent(testcase=...)`` to replay. With one, a fact that has no
         labelled result for that eval is
         dropped: an empty ``evals`` list raises in ``check_eval``, so emitting the
         case would poison the suite it is meant to feed. The dropped count is
@@ -137,15 +138,22 @@ class OkahuEval(BaseEval):
             category: Which eval runs to consider -- ``"llm"``, ``"manual"`` or
                 ``"test"``, or a list of them; defaults to ``["llm", "manual"]``.
                 A bare string is wrapped, so this is always sent as a list.
-            eval_name: Restrict to a single eval. Omitted means every eval supported
-                for the fact level. ``"custom"`` is rejected by discovery.
+            eval_filter: Optional ``eval`` filter narrowing which facts are
+                considered at all -- passed to the fact/trace lookups as a query
+                param. A bare eval name, or the API's ``name:label;name:label``
+                form. Does not by itself cause any eval to be reported.
+            expected_eval: The eval to report on. When set, /evals/report is
+                asked about it and its labels become each case's expected
+                results. ``"custom"`` is rejected: the report resolves a stored
+                template by name and custom templates are not stored.
             page_size: Rows per page (server max 1000).
 
         Returns:
             One FluentTestCase per fact that has at least one labelled eval.
 
         Raises:
-            ValueError: If eval_name is "custom", or fact_name is not recognized.
+            ValueError: If expected_eval is "custom", or fact_name is not
+                recognized.
             AssertionError: If the report service cannot be reached or errors.
         """
         # Local imports: monocle_test_tools.schema is still partially initialized
@@ -155,10 +163,10 @@ class OkahuEval(BaseEval):
         from monocle_test_tools.schema import FactID
         from monocle_test_tools.testcase import FluentTestCase
 
-        if eval_name == "custom":
+        if expected_eval == "custom":
             raise ValueError(
-                "eval_name='custom' is not supported by eval discovery; custom "
-                "templates are not stored, so there is nothing to discover by name.")
+                "expected_eval='custom' is not supported; the report resolves a "
+                "stored template by name and custom templates are not stored.")
 
         from monocle_test_tools.okahu_span_loader import OkahuSpanLoader
 
@@ -169,26 +177,26 @@ class OkahuEval(BaseEval):
         if mapped_fact_name == "traces":
             fact_ids = [normalize_fact_id(tid) for tid in OkahuSpanLoader.get_trace_ids(
                 workflow_name, start_time=start_time, end_time=end_time,
-                eval_filter=eval_name)]
+                eval_filter=eval_filter)]
         else:
             fact_ids = OkahuSpanLoader.get_fact_ids(
                 workflow_name, mapped_fact_name,
-                start_time=start_time, end_time=end_time, eval_filter=eval_name)
+                start_time=start_time, end_time=end_time, eval_filter=eval_filter)
         if not fact_ids:
             return []
 
         evals_by_fact = {}
-        if eval_name:
+        if expected_eval:
             evals_by_fact = cls._eval_report_by_fact(
                 workflow_name=workflow_name, fact_ids=fact_ids,
                 fact_name=mapped_fact_name, start_time=start_time,
-                end_time=end_time, category=category, eval_name=eval_name,
+                end_time=end_time, category=category, eval_name=expected_eval,
                 page_size=page_size)
 
         test_cases = []
         for fact_id in fact_ids:
             evals = evals_by_fact.get(fact_id, [])
-            if eval_name and not evals:
+            if expected_eval and not evals:
                 # Asked for a specific eval and this trace has no labelled result
                 # for it. An empty evals list raises in check_eval, so emitting the
                 # case would poison the suite it is meant to feed.
@@ -199,7 +207,7 @@ class OkahuEval(BaseEval):
             # needs a FactID and run_agent resolves one into the prompt anyway.
             spans = cls._fact_spans(
                 workflow_name, fact_id, mapped_fact_name=mapped_fact_name,
-                start_time=start_time, end_time=end_time, eval_filter=eval_name)
+                start_time=start_time, end_time=end_time, eval_filter=eval_filter)
             test_cases.append(FluentTestCase.from_spans(
                 spans,
                 name=fact_id,
@@ -209,7 +217,7 @@ class OkahuEval(BaseEval):
         dropped = len(fact_ids) - len(test_cases)
         if dropped:
             logger.info("get_test_cases: %d of %d facts had no labelled '%s' eval "
-                        "and were dropped", dropped, len(fact_ids), eval_name)
+                        "and were dropped", dropped, len(fact_ids), expected_eval)
         return test_cases
 
     @classmethod
