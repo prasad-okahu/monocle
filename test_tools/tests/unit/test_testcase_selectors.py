@@ -85,10 +85,16 @@ class TestSelectorRule:
 
 class TestCalledToolTestcase:
 
-    def test_called_tool_testcase_raises_a_named_error_not_a_typeerror(self, asserter):
-        """Stage 3 owns tool test cases; until then say so instead of TypeError."""
-        with pytest.raises(ValueError, match="stage 3"):
+    def test_a_testcase_with_no_tools_raises(self, asserter):
+        """TESTCASE names only agents, so a tool selector has nothing to select."""
+        with pytest.raises(ValueError, match="no tools"):
             asserter.called_tool(testcase=TESTCASE)
+
+    def test_a_tool_testcase_selects(self, asserter):
+        scope = asserter.called_tool(testcase={"tools": {TOOL: {}}})
+
+        assert _drain() == []
+        assert [e.name for e, _ in scope._entity_spans] == [TOOL]
 
 
 class TestStateThreading:

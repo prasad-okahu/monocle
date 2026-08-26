@@ -11,7 +11,7 @@ from monocle_test_tools.constants import CUSTOM_EVAL_TYPE
 from monocle_test_tools.evals.okahu_filtered_eval import build_filtered_report
 from monocle_test_tools.schema import Evaluation, FactID
 from monocle_test_tools.span_loader import JSONSpanLoader, OkahuSpanLoader
-from monocle_test_tools.testcase import Agent, FluentTestCase
+from monocle_test_tools.testcase import Agent, FluentTestCase, Tool
 from monocle_test_tools.testcase_args import (factid_import_kwargs, resolve_testcase,
                                               turn_inputs_from_spans)
 from .comparer.comparer_manager import get_comparer
@@ -89,6 +89,19 @@ def get_test_cases(source:str = "okahu", **kwargs) -> list[FluentTestCase]:
 # Fluent methods that select entities, and the kind of entity each selects. A
 # testcase-driven chain may use only one kind, since each builds its own map.
 _SELECTOR_KINDS = {"called_agent": "agent", "called_tool": "tool"}
+
+
+def _entity_key(entity) -> tuple:
+    """What makes two test-case entries the same queue.
+
+    An Agent has no calling agent of its own, so agents key on the name alone --
+    two same-name entries describe one agent and share its spans. A Tool keys on
+    the name AND its caller, because from_spans records that caller and the same
+    tool called by two agents is two different span sets. An entry naming no
+    agent keys on the name alone and matches any caller.
+    """
+    agent = getattr(entity, "agent", None)
+    return (entity.name, agent.name if agent else None)
 
 def collect_assertions(func):
     """
@@ -471,15 +484,15 @@ class TraceAssertion():
         """Assert tool invocation with optional agent filter and count constraints (count, min_count, max_count).
 
         Args:
-            testcase: Not supported yet -- tool test cases arrive in stage 3.
-                Raises ValueError. The argument exists so that a chain mixing
-                selectors reports the selector rule rather than a TypeError.
+            testcase: Assert every tool the test case names instead of one, and
+                record each one's spans for the input/output checks that follow.
+                Cannot be combined with
+                tool_name/agent_name/count/min_count/max_count.
         """
         if testcase is not None:
-            raise ValueError(
-                "called_tool() does not support testcase= yet; tool test cases arrive "
-                "in stage 3. It accepts the argument now only so that a chain mixing "
-                "selectors reports the selector rule rather than a TypeError.")
+            return self._called_tool_testcase(
+                testcase, tool_name=tool_name, agent_name=agent_name, count=count,
+                min_count=min_count, max_count=max_count, message=message)
         if tool_name is None:
             raise ValueError("tool_name is required")
         TraceAssertion._validate_count_params(count, min_count, max_count)
@@ -582,10 +595,55 @@ class TraceAssertion():
                     f"'{name}'" for name in missing)))
         return self
 
-    def _entity_span_list(self, name:str) -> Optional[list]:
-        """Spans matched for `name`, or None when the selector did not match it."""
-        for entity, spans in self._entity_spans or []:
-            if entity.name == name:
+    def _called_tool_testcase(self, testcase, *, tool_name, agent_name, count,
+                             min_count, max_count, message) -> 'TraceAssertion':
+        """Resolve every tool a test case names into the entity-span map.
+
+        Keyed by tool AND calling agent, unlike agents which key on the name
+        alone: from_spans records the caller, and the same tool called by two
+        agents is two different span sets. An entry naming no agent matches any
+        caller.
+
+        Every missing tool is reported in a single AssertionError, because
+        record_assertion keeps only the first failure of a chain.
+        """
+        testcase = resolve_testcase(testcase, tool_name=tool_name,
+                                    agent_name=agent_name, count=count,
+                                    min_count=min_count, max_count=max_count)
+        if not testcase.tools:
+            raise ValueError(
+                f"testcase '{testcase.name}' names no tools to select; a selector "
+                "with nothing to select must not read as a passing test")
+
+        entity_spans, missing, matched, seen = [], [], [], set()
+        for tool in testcase.tools:
+            key = _entity_key(tool)
+            if key in seen:
+                continue
+            seen.add(key)
+            name, caller = key
+            spans = self.validator._get_tool_invocation_spans(
+                name, caller, filtered_spans=self._filtered_spans)
+            if spans:
+                entity_spans.append((Tool(name=name, agent=tool.agent), spans))
+                matched.extend(spans)
+            else:
+                missing.append(f"'{name}'" + (f" called by '{caller}'" if caller else ""))
+
+        self._entity_spans = entity_spans
+        self._filtered_spans = matched
+
+        if missing:
+            raise AssertionError(message or (
+                f"{len(missing)} of {len(missing) + len(entity_spans)} tools named by "
+                f"testcase '{testcase.name}' were not called: " + ", ".join(missing)))
+        return self
+
+    def _entity_span_list(self, entity) -> Optional[list]:
+        """Spans matched for `entity`, or None when the selector did not match it."""
+        key = _entity_key(entity)
+        for matched, spans in self._entity_spans or []:
+            if _entity_key(matched) == key:
                 return spans
         return None
 
@@ -1525,18 +1583,23 @@ class TraceAssertion():
         testcase = resolve_testcase(testcase)
         if self._entity_spans is None:
             raise ValueError(
-                "no agents selected; chain called_agent(testcase=...) before an "
-                "input/output check that takes a testcase.")
+                "no entities selected; chain called_agent(testcase=...) or "
+                "called_tool(testcase=...) before an input/output check that "
+                "takes a testcase.")
+
+        # The selector that built the map decides which list describes it.
+        kind = self._testcase_selector or "agent"
+        entities = (testcase.tools if kind == "tool" else testcase.agents) or []
 
         checked, failures = 0, []
-        for agent in testcase.agents or []:
+        for agent in entities:
             expected = getattr(agent, field)
             if not expected:
                 # Unset or empty: the test case states no expectation for this
                 # agent's input/output, so there is nothing to check. Covers ""
                 # as well as None -- an empty string asserts nothing either.
                 continue
-            spans = self._entity_span_list(agent.name)
+            spans = self._entity_span_list(agent)
             if spans is None:
                 # called_agent already reported this agent as not called; saying
                 # so again in every I/O check would bury the real failures.
@@ -1551,15 +1614,15 @@ class TraceAssertion():
                 positive_test=positive_test, **io_kwargs)
             if positive_test and not matched:
                 failures.append(
-                    f"agent '{agent.name}' has no {field} matching {expected!r}")
+                    f"{kind} '{agent.name}' has no {field} matching {expected!r}")
             elif not positive_test and matched:
                 failures.append(
-                    f"agent '{agent.name}' has a {field} matching {expected!r}, "
+                    f"{kind} '{agent.name}' has a {field} matching {expected!r}, "
                     "which was not expected")
 
         if failures:
             raise AssertionError(message or (
-                f"{len(failures)} of {checked} agent {field} checks failed:"
+                f"{len(failures)} of {checked} {kind} {field} checks failed:"
                 + "".join(f"{os.linesep}  - {failure}" for failure in failures)))
 
     def _verify_input_output(self, spans:list[Span], expected_inputs:Optional[list[str]], expected_outputs:Optional[list[str]],

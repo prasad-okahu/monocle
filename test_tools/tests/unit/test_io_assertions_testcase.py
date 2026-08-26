@@ -51,7 +51,9 @@ def _select(asserter, testcase):
 
 def _recorded(scope, name, event_name, attr):
     """The value one of an agent's spans actually recorded."""
-    span = scope._entity_span_list(name)[0]
+    from monocle_test_tools.testcase import Agent
+
+    span = scope._entity_span_list(Agent(name=name))[0]
     return [e.attributes.get(attr) for e in span.events if e.name == event_name][0]
 
 
