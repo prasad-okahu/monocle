@@ -1236,3 +1236,68 @@ class TestCheckEvalModes:
     def test_custom_is_still_rejected(self, okahu, post):
         with pytest.raises(ValueError, match="custom"):
             OkahuEval.get_test_cases(**WINDOW, check_eval="custom")
+
+
+class TestCompareEval:
+    """compare_eval sources the label from one eval and names the case after another.
+
+    The eval-tuning case: generate cases asserting that a new template
+    (check_eval) reproduces what a golden one (compare_eval) already recorded.
+    """
+
+    @pytest.fixture(name="okahu")
+    def okahu_fixture(self, monkeypatch):
+        from monocle_test_tools.okahu_span_loader import OkahuSpanLoader
+
+        monkeypatch.setattr(OkahuSpanLoader, "get_trace_ids",
+                            staticmethod(lambda *a, **k: ["aaa"]))
+        monkeypatch.setattr(OkahuSpanLoader, "get_spans", staticmethod(lambda *a, **k: []))
+
+    def test_the_report_asks_for_compare_eval(self, okahu, post):
+        _queue(post, {"results": [_row("aaa", "hallucination_v1", "no_hallucination")]})
+
+        OkahuEval.get_test_cases(**WINDOW, check_eval="hallucination_v2",
+                                 compare_eval="hallucination_v1")
+
+        assert post["calls"][0]["body"]["eval_names"] == ["hallucination_v1"]
+
+    def test_the_case_names_check_eval_but_holds_compare_evals_label(self, okahu, post):
+        _queue(post, {"results": [_row("aaa", "hallucination_v1", "no_hallucination")]})
+
+        cases = OkahuEval.get_test_cases(**WINDOW, check_eval="hallucination_v2",
+                                         compare_eval="hallucination_v1")
+
+        assert cases[0].evals == [Eval(name="hallucination_v2",
+                                       result="no_hallucination")]
+
+    def test_several_rows_all_take_the_check_eval_name(self, okahu, post):
+        _queue(post, {"results": [_row("aaa", "hallucination_v1", "no_hallucination"),
+                                  _row("aaa", "hallucination_v1", "minor")]})
+
+        cases = OkahuEval.get_test_cases(**WINDOW, check_eval="v2",
+                                         compare_eval="hallucination_v1")
+
+        assert [e.name for e in cases[0].evals] == ["v2", "v2"]
+
+    def test_a_fact_without_the_compare_label_is_dropped(self, okahu, post):
+        _queue(post, {"results": []})
+
+        assert OkahuEval.get_test_cases(**WINDOW, check_eval="v2",
+                                        compare_eval="v1") == []
+
+    def test_without_compare_eval_the_row_name_is_used(self, okahu, post):
+        _queue(post, {"results": [_row("aaa", "hallucination", "minor")]})
+
+        cases = OkahuEval.get_test_cases(**WINDOW, check_eval="hallucination")
+
+        assert cases[0].evals == [Eval(name="hallucination", result="minor")]
+
+    @pytest.mark.parametrize("check", [True, False, None])
+    def test_compare_eval_needs_a_named_check_eval(self, okahu, post, check):
+        """There is no single name to attach the borrowed label to otherwise."""
+        with pytest.raises(ValueError, match="compare_eval"):
+            OkahuEval.get_test_cases(**WINDOW, check_eval=check, compare_eval="v1")
+
+    def test_custom_compare_eval_is_rejected(self, okahu, post):
+        with pytest.raises(ValueError, match="custom"):
+            OkahuEval.get_test_cases(**WINDOW, check_eval="v2", compare_eval="custom")

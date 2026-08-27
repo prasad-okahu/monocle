@@ -73,6 +73,7 @@ class OkahuEval(BaseEval):
                        category: Union[str, list] = "llm",
                        eval_filter: Optional[str] = None,
                        check_eval: Optional[Union[bool, str]] = None,
+                       compare_eval: Optional[str] = None,
                        page_size: int = 100) -> list:
         """Build FluentTestCases from the traces recorded for a workflow.
 
@@ -148,6 +149,13 @@ class OkahuEval(BaseEval):
                 report call at all. The labels become each case's expected
                 results. ``"custom"`` is rejected: the report resolves a stored
                 template by name and custom templates are not stored.
+            compare_eval: Take the expected result from a *different* eval. The
+                report is asked about this one and its labels are used, but each
+                case still names ``check_eval`` -- so the case reads "run
+                check_eval, expect what compare_eval recorded". That is the
+                eval-tuning question: does a new template reproduce a golden
+                one's labels? Requires ``check_eval`` to be a name, since there
+                is otherwise nothing to attach the borrowed label to.
             page_size: Rows per page (server max 1000).
 
         Returns:
@@ -165,10 +173,16 @@ class OkahuEval(BaseEval):
         from monocle_test_tools.schema import FactID
         from monocle_test_tools.testcase import FluentTestCase
 
-        if check_eval == "custom":
+        if "custom" in (check_eval, compare_eval):
             raise ValueError(
-                "check_eval='custom' is not supported; the report resolves a "
-                "stored template by name and custom templates are not stored.")
+                "'custom' is not supported for check_eval or compare_eval; the "
+                "report resolves a stored template by name and custom templates "
+                "are not stored.")
+        if compare_eval and not isinstance(check_eval, str):
+            raise ValueError(
+                "compare_eval needs check_eval to name a single eval: its label is "
+                "borrowed as the expected result for check_eval, so there must be "
+                f"one name to attach it to (got check_eval={check_eval!r}).")
 
         from monocle_test_tools.okahu_span_loader import OkahuSpanLoader
 
@@ -195,7 +209,9 @@ class OkahuEval(BaseEval):
                 workflow_name=workflow_name, fact_ids=fact_ids,
                 fact_name=mapped_fact_name, start_time=start_time,
                 end_time=end_time, category=category,
-                eval_name=check_eval if isinstance(check_eval, str) else None,
+                eval_name=compare_eval or (
+                    check_eval if isinstance(check_eval, str) else None),
+                name_as=check_eval if compare_eval else None,
                 page_size=page_size)
 
         test_cases = []
@@ -250,7 +266,8 @@ class OkahuEval(BaseEval):
 
     @classmethod
     def _eval_report_by_fact(cls, *, workflow_name, fact_ids, fact_name, start_time,
-                             end_time, category, eval_name, page_size) -> dict:
+                             end_time, category, eval_name, page_size,
+                             name_as=None) -> dict:
         """Labelled evals for the given facts, keyed by bare-hex fact id.
 
         Sends fact_ids, which takes /evals/report OUT of discovery mode -- the
@@ -259,6 +276,9 @@ class OkahuEval(BaseEval):
 
         ``eval_name`` of None asks for every eval the fact level supports, which
         the API expresses the same way: by omitting ``eval_names``.
+
+        ``name_as`` renames the evals it builds, so a label recorded by one eval
+        becomes the expected result for another -- see compare_eval.
         """
         from monocle_test_tools.evals.okahu_filtered_eval import (OkahuFilteredEval,
                                                                   normalize_fact_id)
@@ -286,7 +306,7 @@ class OkahuEval(BaseEval):
             if not fact_id:
                 continue
             by_fact.setdefault(fact_id, []).append(
-                Eval(name=row.get("eval_name"), result=label))
+                Eval(name=name_as or row.get("eval_name"), result=label))
         return by_fact
 
     @staticmethod

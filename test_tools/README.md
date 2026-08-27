@@ -604,6 +604,7 @@ Re-running the evals against their own recorded labels is a regression test: it 
 | `workflow_name`, `start_time`, `end_time` | Required for Okahu. The window has no silent default |
 | `fact_name` | Fact level, default `"traces"`. Above trace level (`"agentic_turns"`, `"agentic_sessions"`, ...) each fact spans several traces and all their spans describe it |
 | `check_eval` | `True` for every eval recorded, a string for one, `False`/omitted for none. A fact with no labelled result is dropped |
+| `compare_eval` | Borrow the expected result from a *different* eval: the report is asked about this one, but each case still names `check_eval`. So the case reads "run `check_eval`, expect what `compare_eval` recorded" — the eval-tuning question of whether a new template reproduces a golden one's labels. Requires `check_eval` to be a name |
 | `eval_filter` | Narrows *which facts are considered*, as an `eval` query filter. Independent of `check_eval` |
 | `category` | Which eval runs count — `"llm"` (default), `"manual"`, `"test"`, or a list |
 | `path` | For `source="local"`: the JSON file to load |
