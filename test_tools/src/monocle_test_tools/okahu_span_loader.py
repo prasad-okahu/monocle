@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 import requests
 from opentelemetry.sdk.trace import ReadableSpan
 from monocle_test_tools.file_span_loader import JSONSpanLoader
@@ -139,6 +139,206 @@ class OkahuSpanLoader:
     # ------------------------------------------------------------------ #
     #  Public helpers                                                     #
     # ------------------------------------------------------------------ #
+
+    @classmethod
+    def setup_test_cases(cls, *, workflow_name: str, start_time: str, end_time: str,
+                         fact_name: str = "traces",
+                         category: Union[str, list] = "llm",
+                         eval_filter: Optional[str] = None,
+                         check_eval: Optional[Union[bool, str]] = None,
+                         compare_eval: Optional[str] = None,
+                         page_size: int = 100) -> list:
+        """Build FluentTestCases from the traces recorded for a workflow.
+
+        One test case per fact in the window. How the facts are found depends on
+        the level:
+
+        - ``traces`` (the default): a trace is its own fact, so
+          ``OkahuSpanLoader.get_trace_ids`` enumerates them and each has one
+          trace's spans.
+        - anything above a trace (agent requests, sessions, ...):
+          ``get_fact_ids`` enumerates them from the fact ids API, then each
+          fact's traces are looked up and *all* their spans concatenated -- the
+          combined set is what describes that fact.
+
+        Either way the spans are read by ``FluentTestCase.from_spans``, which
+        fills in the agents invoked, the tools they called and the tokens
+        consumed. Finally, only when ``check_eval`` is set,
+        ``/v1/workflows/{workflow_name}/evals/report`` is asked about exactly those
+        traces (``fact_ids``) and that eval, and the labels it returns become each
+        case's expected results.
+
+        The case's ``input`` stays the FactID rather than the prompt from_spans
+        would derive: ``with_trace_source(testcase=...)`` needs a FactID, and
+        ``run_agent(testcase=...)`` resolves one into the prompt itself.
+
+        This is one request per trace plus one for the report, and above trace
+        level another per fact to find its traces -- so a wide window is a lot of
+        calls.
+
+        Sending ``fact_ids`` takes the report endpoint OUT of discovery mode -- the
+        absence of fact_ids is what selects discovery -- so it reports on traces
+        already enumerated rather than re-discovering them.
+
+        Without ``check_eval`` no report call is made at all and the cases
+        carry no evals -- still fully described otherwise, and ready for
+        ``run_agent(testcase=...)`` to replay. With one, a fact that has no
+        labelled result for that eval is
+        dropped: an empty ``evals`` list raises in ``check_eval``, so emitting the
+        case would poison the suite it is meant to feed. The dropped count is
+        logged rather than passed over in silence.
+
+        Either way the result is directly parametrizable, being the shape
+        ``with_trace_source(testcase=...)`` and ``check_eval(testcase=...)`` consume.
+
+        A row's label is taken from ``authoritative.eval_result.label``, falling
+        back to the newest entry in ``latest``. Rows with neither are skipped, and a
+        fact left with no labelled eval yields no test case at all -- an empty
+        ``evals`` list would raise in check_eval, so emitting one would only
+        manufacture a broken case.
+
+        Custom evals (``eval_id`` prefixed ``custom_evaluation__``) are returned
+        like any other, by name. Okahu does not store their templates, so if such a
+        name does not also resolve as a stored template, the case will fail when
+        check_eval runs it rather than being filtered out here -- deliberate, so the
+        report is reflected as-is instead of silently shrinking.
+
+        Args:
+            workflow_name: Okahu workflow / service name.
+            start_time: Window start. Required -- discovery has no silent default.
+            end_time: Window end. Required.
+            fact_name: User-facing fact level, mapped to the Okahu name for the
+                request. The returned FactIDs keep the user-facing name.
+            category: Which eval runs to consider -- ``"llm"`` (the default),
+                ``"manual"`` or ``"test"``, or a list of them. A bare string is
+                wrapped, so this is always sent as a list.
+            eval_filter: Optional ``eval`` filter narrowing which facts are
+                considered at all -- passed to the fact/trace lookups as a query
+                param. A bare eval name, or the API's ``name:label;name:label``
+                form. Does not by itself cause any eval to be reported.
+            check_eval: Which evals to report on, as a switch or a name.
+                ``True`` reports every eval recorded for the fact level, a
+                string reports only that one, and ``False``/omitted makes no
+                report call at all. The labels become each case's expected
+                results. ``"custom"`` is rejected: the report resolves a stored
+                template by name and custom templates are not stored.
+            compare_eval: Take the expected result from a *different* eval. The
+                report is asked about this one and its labels are used, but each
+                case still names ``check_eval`` -- so the case reads "run
+                check_eval, expect what compare_eval recorded". That is the
+                eval-tuning question: does a new template reproduce a golden
+                one's labels? Requires ``check_eval`` to be a name, since there
+                is otherwise nothing to attach the borrowed label to.
+            page_size: Rows per page (server max 1000).
+
+        Returns:
+            One FluentTestCase per fact that has at least one labelled eval.
+
+        Raises:
+            ValueError: If check_eval is "custom", or fact_name is not
+                recognized.
+            AssertionError: If the report service cannot be reached or errors.
+        """
+        # Local imports: monocle_test_tools.schema is still partially initialized
+        # when this module is first imported (schema -> ... -> evals -> okahu_eval),
+        # so importing FactID at module scope raises. Verified, not precautionary.
+        from monocle_test_tools.evals.okahu_filtered_eval import normalize_fact_id
+        from monocle_test_tools.schema import FactID
+        from monocle_test_tools.testcase import FluentTestCase
+
+        if "custom" in (check_eval, compare_eval):
+            raise ValueError(
+                "'custom' is not supported for check_eval or compare_eval; the "
+                "report resolves a stored template by name and custom templates "
+                "are not stored.")
+        if compare_eval and not isinstance(check_eval, str):
+            raise ValueError(
+                "compare_eval needs check_eval to name a single eval: its label is "
+                "borrowed as the expected result for check_eval, so there must be "
+                f"one name to attach it to (got check_eval={check_eval!r}).")
+
+        # Local import: okahu_eval imports this module, so importing it back at
+        # module scope would be a cycle. The eval report stays with the
+        # evaluator; only the span gathering belongs here.
+        from monocle_test_tools.evals.okahu_eval import OkahuEval
+
+        mapped_fact_name = OkahuEval._map_fact_name(fact_name)
+        # A trace IS its own fact, so the trace list is the fact list. Any level
+        # above a trace -- agent requests, sessions -- is enumerated by its own
+        # ids API, and each of those facts spans one or more traces.
+        if mapped_fact_name == "traces":
+            fact_ids = [normalize_fact_id(tid) for tid in cls.get_trace_ids(
+                workflow_name, start_time=start_time, end_time=end_time,
+                eval_filter=eval_filter)]
+        else:
+            fact_ids = cls.get_fact_ids(
+                workflow_name, mapped_fact_name,
+                start_time=start_time, end_time=end_time, eval_filter=eval_filter)
+        if not fact_ids:
+            return []
+
+        evals_by_fact = {}
+        if check_eval:
+            # A string names one eval; True asks for every eval the fact level
+            # supports, which the report expresses by omitting eval_names.
+            evals_by_fact = OkahuEval._eval_report_by_fact(
+                workflow_name=workflow_name, fact_ids=fact_ids,
+                fact_name=mapped_fact_name, start_time=start_time,
+                end_time=end_time, category=category,
+                eval_name=compare_eval or (
+                    check_eval if isinstance(check_eval, str) else None),
+                name_as=check_eval if compare_eval else None,
+                page_size=page_size)
+
+        test_cases = []
+        for fact_id in fact_ids:
+            evals = evals_by_fact.get(fact_id, [])
+            if check_eval and not evals:
+                # Asked for a specific eval and this trace has no labelled result
+                # for it. An empty evals list raises in check_eval, so emitting the
+                # case would poison the suite it is meant to feed.
+                continue
+            # from_spans reads the agents, tools and token count off the spans;
+            # name and input are supplied here. input stays the FactID rather than
+            # the recorded prompt from_spans would derive: with_trace_source
+            # needs a FactID and run_agent resolves one into the prompt anyway.
+            spans = cls._fact_spans(
+                workflow_name, fact_id, mapped_fact_name=mapped_fact_name,
+                start_time=start_time, end_time=end_time, eval_filter=eval_filter)
+            test_cases.append(FluentTestCase.from_spans(
+                spans,
+                name=fact_id,
+                input=FactID(fact_id=fact_id, fact_name=fact_name, source="okahu"),
+                evals=evals))
+
+        dropped = len(fact_ids) - len(test_cases)
+        if dropped:
+            logger.info("setup_test_cases: %d of %d facts had no labelled '%s' eval "
+                        "and were dropped", dropped, len(fact_ids), check_eval)
+        return test_cases
+
+    @classmethod
+    def _fact_spans(cls, workflow_name, fact_id, *, mapped_fact_name,
+                    start_time, end_time, eval_filter=None) -> list:
+        """Every span belonging to one fact.
+
+        A trace-level fact is one trace, so its spans are one call. A higher
+        level fact spans one or more traces, so its traces are looked up and
+        their spans concatenated -- the combined set is what describes the fact.
+        """
+        if mapped_fact_name == "traces":
+            return cls.get_spans(
+                workflow_name, fact_id, start_time=start_time, end_time=end_time)
+
+        spans = []
+        for trace_id in cls.get_trace_ids(
+                workflow_name, mapped_fact_name, fact_id,
+                start_time=start_time, end_time=end_time, eval_filter=eval_filter):
+            spans.extend(cls.get_spans(
+                workflow_name, trace_id, start_time=start_time, end_time=end_time))
+        return spans
+
+
 
     @staticmethod
     def get_fact_ids(

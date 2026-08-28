@@ -42,7 +42,8 @@ def get_test_cases(source:str = "okahu", **kwargs) -> list[FluentTestCase]:
             Only meaningful for okahu, where it filters the query.
         **kwargs: Passed to the source. For okahu: workflow_name, start_time and
             end_time (all required), plus optional fact_name, category and
-            page_size -- see OkahuEval.get_test_cases. For local: ``path``.
+            page_size and compare_eval -- see OkahuSpanLoader.setup_test_cases.
+            For local: ``path``.
 
     Returns:
         For okahu, one FluentTestCase per fact that has at least one labelled
@@ -83,8 +84,8 @@ def get_test_cases(source:str = "okahu", **kwargs) -> list[FluentTestCase]:
         raise ValueError(
             f"get_test_cases does not support source '{source}'; supported sources "
             "are 'okahu' (discover from the eval store) and 'local' (a JSON file).")
-    from .evals.okahu_eval import OkahuEval
-    return OkahuEval.get_test_cases(**kwargs)
+    from .okahu_span_loader import OkahuSpanLoader
+    return OkahuSpanLoader.setup_test_cases(**kwargs)
 
 # Fluent methods that select entities, and the kind of entity each selects. A
 # testcase-driven chain may use only one kind, since each builds its own map.
