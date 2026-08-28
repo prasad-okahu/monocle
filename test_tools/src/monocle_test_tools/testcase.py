@@ -151,6 +151,7 @@ class FluentTestCase(BaseModel):
 
     name: Optional[str] = Field("monocle_test", description="Name of the test case.")
     input: Optional[Union[Tuple[Any, ...], FactID]] = Field(None, description="Input prompt or data for the test case or fact_id/fact_name.")
+    output: Optional[Union[str, list[str]]] = Field(None, description="expected output of the run as a whole, checked when no entity was selected")
     agents: Optional[list[Agent]] = Field([], description="agents to validate")
     tools: Optional[list[Tool]] = Field([], description="tools to validate")
     evals: Optional[list[Eval]] = Field([], description="evals to run")

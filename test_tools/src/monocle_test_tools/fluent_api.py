@@ -1563,6 +1563,36 @@ class TraceAssertion():
         """Load spans into the validator's memory exporter for assertions."""
         self.validator.add_remote_spans(spans)
 
+    def _verify_top_level_io(self, expected, *, field:str, comparer:BaseComparer,
+                             positive_test:bool, message:Optional[str]) -> None:
+        """Check a test case's own `field` against the spans currently in scope.
+
+        A list means every entry must hold -- they are separate expectations
+        about one output, not alternatives, so each is checked on its own and
+        all the failures are reported together.
+        """
+        expectations = [expected] if isinstance(expected, str) else list(expected)
+        failures = []
+        for value in expectations:
+            if not value:
+                continue
+            io_kwargs = {"expected_inputs": [value], "expected_outputs": []} \
+                if field == "input" else \
+                {"expected_inputs": [], "expected_outputs": [value]}
+            matched = self.validator._check_input_output(
+                self._filtered_spans, comparer=comparer, eval=self._eval,
+                positive_test=positive_test, **io_kwargs)
+            if positive_test and not matched:
+                failures.append(f"no {field} matching {value!r}")
+            elif not positive_test and matched:
+                failures.append(
+                    f"{field} matching {value!r}, which was not expected")
+
+        if failures:
+            raise AssertionError(message or (
+                f"{len(failures)} of {len(expectations)} {field} checks failed:"
+                + "".join(f"{os.linesep}  - {failure}" for failure in failures)))
+
     def _verify_io_testcase(self, testcase, *, field:str, comparer:BaseComparer,
                             positive_test:bool, message:Optional[str]) -> None:
         """Check each test-case agent's own `field` against that agent's spans.
@@ -1583,10 +1613,19 @@ class TraceAssertion():
         """
         testcase = resolve_testcase(testcase)
         if self._entity_spans is None:
+            # No selector ran, so there are no per-entity expectations. A
+            # top-level `output` is the plain end-to-end check -- assert it
+            # against whatever spans are in scope and stop there.
+            top_level = getattr(testcase, field, None)
+            if top_level:
+                self._verify_top_level_io(
+                    top_level, field=field, comparer=comparer,
+                    positive_test=positive_test, message=message)
+                return
             raise ValueError(
                 "no entities selected; chain called_agent(testcase=...) or "
                 "called_tool(testcase=...) before an input/output check that "
-                "takes a testcase.")
+                f"takes a testcase, or give the testcase a top-level '{field}'.")
 
         # The selector that built the map decides which list describes it.
         kind = self._testcase_selector or "agent"

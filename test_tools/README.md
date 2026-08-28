@@ -536,6 +536,7 @@ A test case is a dict (or a `FluentTestCase`); both are accepted everywhere `tes
   "name": "books a flight",              # optional; names the case in failures
   "input": "Book a flight",              # a string, a tuple of args, or a FactID (below)
   "expected": {                          # optional wrapper; these may also sit at the top level
+      "output": ["Booked flight", "Mumbai"],   # end-to-end check, no entity named
       "agents": {"supervisor": {"input": "...", "output": "..."}},
       "tools":  {"book_flight": {"output": "confirmed", "agent": {"flight_agent": {}}}},
       "evals":  {"hallucination": "no_hallucination"},
@@ -544,6 +545,7 @@ A test case is a dict (or a `FluentTestCase`); both are accepted everywhere `tes
 }
 ```
 
+- **A top-level `output`** is an end-to-end check that names no entity: a string, or a list where *every* entry must appear. The input/output checks fall back to it when no selector was chained, so `contains_output(testcase=tc)` on its own asserts against the whole trace. When a selector *did* run, the per-entity expectations are what count.
 - **`agents` / `tools` / `evals` accept a mapping** (`{name: body}`) or a list of single-key entries (`[{name: body}, ...]`). The mapping form reads better by hand; the list form allows the same name twice.
 - **An eval may name a category** in its key: `{"hallucination@llm": "minor_hallucination"}` is the `hallucination` eval in the `llm` category. Without `@`, no category.
 - **Unknown keys are rejected.** A typo like `"evels"` raises rather than silently asserting nothing.

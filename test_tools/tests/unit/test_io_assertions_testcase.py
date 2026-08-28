@@ -254,3 +254,68 @@ def test_success_criterion(asserter):
     asserter.called_agent(testcase=tc).contains_output(testcase=tc)
 
     assert _drain() == []
+
+
+class TestTopLevelOutput:
+    """A test case may state an expected output without naming an entity.
+
+    That is a plain end-to-end check: no called_agent/called_tool in front, so
+    the value is checked against whatever spans are in scope.
+    """
+
+    def test_a_string_is_checked_against_the_trace(self, asserter):
+        tc = {"output": SUPERVISOR_OUT}
+
+        asserter.contains_output(testcase=tc)
+
+        assert _drain() == []
+
+    def test_every_entry_of_a_list_must_appear(self, asserter):
+        tc = {"output": ["OK. Here's a summary", "Marriot Intercontinental"]}
+
+        asserter.contains_output(testcase=tc)
+
+        assert _drain() == []
+
+    def test_a_missing_entry_fails(self, asserter):
+        tc = {"output": ["OK. Here's a summary", "definitely not present"]}
+
+        asserter.contains_output(testcase=tc)
+
+        messages = _drain()
+        assert len(messages) == 1
+        assert "definitely not present" in messages[0]
+
+    def test_it_lives_under_the_expected_wrapper_too(self, asserter):
+        tc = {"expected": {"output": SUPERVISOR_OUT}}
+
+        asserter.contains_output(testcase=tc)
+
+        assert _drain() == []
+
+    def test_entities_win_when_a_selector_ran(self, asserter):
+        """With a selector in front, the per-entity expectations are what count."""
+        tc = {"agents": {SUPERVISOR: {"output": SUPERVISOR_OUT}},
+              "output": "definitely not present"}
+
+        _select(asserter, tc).contains_output(testcase=tc)
+
+        assert _drain() == []
+
+    def test_no_output_and_no_selector_still_raises(self, asserter):
+        with pytest.raises(ValueError, match="called_agent"):
+            asserter.contains_output(testcase={"agents": {SUPERVISOR: {}}})
+
+    def test_has_output_uses_the_configured_comparer(self, asserter):
+        tc = {"output": "not the recorded output in full"}
+
+        asserter.has_output(testcase=tc)
+
+        assert len(_drain()) == 1
+
+    def test_does_not_contain_output_inverts_it(self, asserter):
+        tc = {"output": "text that is definitely absent"}
+
+        asserter.does_not_contain_output(testcase=tc)
+
+        assert _drain() == []

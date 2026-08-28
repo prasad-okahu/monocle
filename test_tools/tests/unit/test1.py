@@ -10,7 +10,7 @@ BASELINE_TESTCASES = [
     {
         "input": "Book a flight from San Francisco to Mumbai for 26th Nov 2025",
         "expected" : {
-            "outputs" : ["Booked flight", "Mumbai", "San Francisco"], 
+            "output" : ["Booked flight", "Mumbai", "San Francisco"],
         }
     },
     {
