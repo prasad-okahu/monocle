@@ -587,8 +587,8 @@ Every failure is collected and reported together: one missing agent out of four 
 from monocle_test_tools import setup_test_cases
 
 CASES = setup_test_cases(source="okahu", workflow_name="my_app",
-                       start_time="2026-05-01", end_time="2026-06-30",
-                       check_eval="hallucination")
+                         start_time="2026-05-01", end_time="2026-06-30",
+                         check_eval="hallucination")
 
 @pytest.mark.parametrize("testcase", CASES)
 def test_evals_still_reproduce(monocle_trace_asserter, testcase):
@@ -618,6 +618,43 @@ CASES = setup_test_cases(source="local", path="cases.json")
 ```
 
 Since these cases carry agents and tools as well as evals, they feed the selectors too — `called_agent(testcase=tc).contains_output(testcase=tc)` asserts that a re-run still produces what the recording did.
+
+Each fact costs a request for its spans, plus one per fact above trace level to find its traces, plus one for the report. A wide window is a lot of calls — freeze the result to JSON if you will re-run it.
+
+### Three flows this enables
+
+**Eval regression** — do the recorded labels still reproduce? Cases carry each fact and the label it already has; re-running the eval must agree.
+
+```python
+CASES = setup_test_cases(source="okahu", workflow_name="my_app",
+                         start_time=ST, end_time=ET, check_eval="hallucination")
+
+@pytest.mark.parametrize("testcase", CASES)
+def test_regression(monocle_trace_asserter, testcase):
+    monocle_trace_asserter.with_trace_source(testcase=testcase, workflow_name="my_app")
+    monocle_trace_asserter.with_evaluation("okahu").check_eval(testcase=testcase)
+```
+
+**Eval tuning** — does a new template reproduce a golden one? `compare_eval` sources the expected label from the golden eval while the case still names the new one, so a failure means the two disagree.
+
+```python
+CASES = setup_test_cases(source="okahu", workflow_name="my_app",
+                         start_time=ST, end_time=ET,
+                         check_eval="hallucination_v2",       # what the test runs
+                         compare_eval="hallucination_v1")     # where "expected" comes from
+```
+
+**A/B replay** — does a *live* agent still behave like the recording? The `FactID` input is resolved to the prompt it was driven with and replayed against the running agent, then the fresh trace is asserted against what the recording did.
+
+```python
+@pytest.mark.parametrize("testcase", CASES)
+@pytest.mark.asyncio
+async def test_ab(monocle_trace_asserter, testcase):
+    await monocle_trace_asserter.run_agent_async(root_agent, "google_adk", testcase=testcase)
+
+    monocle_trace_asserter.called_agent(testcase=testcase).contains_output(testcase=testcase)
+    monocle_trace_asserter.called_tool(testcase=testcase)
+```
 
 ---
 
