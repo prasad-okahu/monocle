@@ -25,7 +25,7 @@ from .trace_utils import get_function_signature, get_caller_file_line
 from .schema import MockTool
 from opentelemetry.sdk.trace import Span
 
-def get_test_cases(source:str = "okahu", **kwargs) -> list[FluentTestCase]:
+def setup_test_cases(source:str = "okahu", **kwargs) -> list[FluentTestCase]:
     """Build FluentTestCases from evals already recorded on a trace source.
 
     Turns a recorded population into a parametrizable list: each returned case
@@ -55,7 +55,7 @@ def get_test_cases(source:str = "okahu", **kwargs) -> list[FluentTestCase]:
         FileNotFoundError: If the local ``path`` does not exist.
 
     Example:
-        CASES = get_test_cases(source="okahu", workflow_name="wf",
+        CASES = setup_test_cases(source="okahu", workflow_name="wf",
                                start_time="2026-05-01", end_time="2026-06-30")
 
         @pytest.mark.parametrize("testcase", CASES)
@@ -66,7 +66,7 @@ def get_test_cases(source:str = "okahu", **kwargs) -> list[FluentTestCase]:
 
         # Freeze that set once, then re-run it with no network call:
         #   json.dump([c.model_dump() for c in CASES], open("cases.json", "w"))
-        CASES = get_test_cases(source="local", path="cases.json")
+        CASES = setup_test_cases(source="local", path="cases.json")
     """
     if source == "local":
         path = kwargs.pop("path", None)
@@ -82,7 +82,7 @@ def get_test_cases(source:str = "okahu", **kwargs) -> list[FluentTestCase]:
 
     if source != "okahu":
         raise ValueError(
-            f"get_test_cases does not support source '{source}'; supported sources "
+            f"setup_test_cases does not support source '{source}'; supported sources "
             "are 'okahu' (discover from the eval store) and 'local' (a JSON file).")
     from .okahu_span_loader import OkahuSpanLoader
     return OkahuSpanLoader.setup_test_cases(**kwargs)

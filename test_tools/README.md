@@ -15,7 +15,7 @@ A comprehensive testing and validation framework for monocle AI agent tracing. T
 - **Mock Tools**: Simulate tool behavior without invoking external dependencies.
 - **Offline Testing**: Assert against pre-recorded trace JSON files without running live agents.
 - **Test Cases as Data**: Describe a run once as a `FluentTestCase` and let `run_agent`, the span selectors, the input/output checks and `check_eval` all read it via `testcase=`.
-- **Generated Test Cases**: Turn what a workflow already recorded into a parametrizable suite with `get_test_cases()`, from Okahu or a committed JSON file.
+- **Generated Test Cases**: Turn what a workflow already recorded into a parametrizable suite with `setup_test_cases()`, from Okahu or a committed JSON file.
 
 ## How does it work
 
@@ -581,12 +581,12 @@ Every failure is collected and reported together: one missing agent out of four 
 
 ### Generating test cases from recorded runs
 
-`get_test_cases()` turns what a workflow already recorded into a parametrizable list. Each returned case points at one fact and carries the agents it invoked, the tools they called, its token count, and optionally its eval results.
+`setup_test_cases()` turns what a workflow already recorded into a parametrizable list. Each returned case points at one fact and carries the agents it invoked, the tools they called, its token count, and optionally its eval results.
 
 ```python
-from monocle_test_tools import get_test_cases
+from monocle_test_tools import setup_test_cases
 
-CASES = get_test_cases(source="okahu", workflow_name="my_app",
+CASES = setup_test_cases(source="okahu", workflow_name="my_app",
                        start_time="2026-05-01", end_time="2026-06-30",
                        check_eval="hallucination")
 
@@ -614,7 +614,7 @@ Because the model serializes into a shape it also accepts, a discovered set can 
 ```python
 json.dump([c.model_dump() for c in CASES], open("cases.json", "w"))
 # later, offline:
-CASES = get_test_cases(source="local", path="cases.json")
+CASES = setup_test_cases(source="local", path="cases.json")
 ```
 
 Since these cases carry agents and tools as well as evals, they feed the selectors too — `called_agent(testcase=tc).contains_output(testcase=tc)` asserts that a re-run still produces what the recording did.

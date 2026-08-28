@@ -25,7 +25,7 @@ def pytest_sessionfinish(session) -> None:
 def pytest_make_parametrize_id(config, val, argname):
     """Name a parametrized test case after itself rather than its index.
 
-    A suite built by ``get_test_cases()`` is one test function over many cases,
+    A suite built by ``setup_test_cases()`` is one test function over many cases,
     so the default ids (``testcase0``, ``testcase1``, ...) leave a failure
     saying nothing about *which* fact broke. Returning the case's own name makes
     the node id ``test_something[<fact id or case name>]``, which is also what

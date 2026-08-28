@@ -25,7 +25,7 @@ from .evals import ( BaseEval, BertScorerEval, OkahuEval)
 from .comparer import ( BaseComparer, BertScoreComparer, DefaultComparer)
 from . import trace_utils
 from .runner import AgentRunner, get_agent_runner
-from .fluent_api import TraceAssertion, get_test_cases
+from .fluent_api import TraceAssertion, setup_test_cases
 from .csv_cases import CsvCase, load_cases_from_csv, monocle_csv_cases
 from .test_generator import TestGenerator
 from . import pytest_plugin
@@ -51,7 +51,7 @@ __all__ = [
     "MockTool",
     "ToolType",
     "TraceAssertion",
-    "get_test_cases",
+    "setup_test_cases",
     "CsvCase",
     "load_cases_from_csv",
     "monocle_csv_cases",

@@ -12,7 +12,7 @@ import os
 import pytest
 
 from monocle_test_tools.okahu_span_loader import OkahuSpanLoader
-from monocle_test_tools.fluent_api import get_test_cases
+from monocle_test_tools.fluent_api import setup_test_cases
 from monocle_test_tools.schema import FactID
 from monocle_test_tools.testcase import Eval, FluentTestCase
 
@@ -325,21 +325,21 @@ class TestFluentEntryPoint:
     def test_delegates_to_okahu(self, post):
         _queue(post, {"results": [_row("aaa", "hallucination", "minor")]})
 
-        cases = get_test_cases(source="okahu", check_eval=EVAL, **WINDOW)
+        cases = setup_test_cases(source="okahu", check_eval=EVAL, **WINDOW)
 
         assert [c.name for c in cases] == ["aaa"]
 
     def test_eval_name_is_forwarded(self, post):
         _queue(post, {"results": []})
 
-        get_test_cases(source="okahu", check_eval="hallucination", **WINDOW)
+        setup_test_cases(source="okahu", check_eval="hallucination", **WINDOW)
 
         assert post["calls"][0]["body"]["eval_names"] == ["hallucination"]
 
     def test_defaults_to_okahu(self, post):
         _queue(post, {"results": []})
 
-        get_test_cases(check_eval=EVAL, **WINDOW)
+        setup_test_cases(check_eval=EVAL, **WINDOW)
 
         assert post["calls"][0]["url"].endswith("/evals/report")
 
@@ -347,13 +347,13 @@ class TestFluentEntryPoint:
     def test_unsupported_sources_are_rejected(self, source):
         """'local' is supported (see TestLocalSource); these are not."""
         with pytest.raises(ValueError, match="does not support source"):
-            get_test_cases(source=source, **WINDOW)
+            setup_test_cases(source=source, **WINDOW)
 
 
 def test_exported_from_the_package():
     import monocle_test_tools
 
-    assert monocle_test_tools.get_test_cases is get_test_cases
+    assert monocle_test_tools.setup_test_cases is setup_test_cases
 
 
 @pytest.mark.usefixtures("stub_traces")
@@ -512,7 +512,7 @@ class TestSpanLoaderEmptyEndpoint:
 
 @pytest.mark.usefixtures("stub_traces")
 class TestLocalSource:
-    """get_test_cases(source="local", path=...) loads a committed JSON array.
+    """setup_test_cases(source="local", path=...) loads a committed JSON array.
 
     The point is the golden-dataset workflow: freeze what Okahu returned today,
     commit it, and re-run it later with no network call.
@@ -532,7 +532,7 @@ class TestLocalSource:
              "expected": {"evals": {"hallucination": "no_hallucination"}}},
         ])
 
-        cases = get_test_cases(source="local", path=path)
+        cases = setup_test_cases(source="local", path=path)
 
         assert [c.input.fact_id for c in cases] == ["aaa", "bbb"]
         assert cases[0].evals == [Eval(name="hallucination",
@@ -546,7 +546,7 @@ class TestLocalSource:
                           "token_limit": 5000}},
         ])
 
-        cases = get_test_cases(source="local", path=path)
+        cases = setup_test_cases(source="local", path=path)
 
         assert cases[0].input == ("Book a flight",)
         assert cases[0].token_limit == 5000
@@ -559,40 +559,40 @@ class TestLocalSource:
         discovered = OkahuSpanLoader.setup_test_cases(**WINDOW, check_eval=EVAL)
         path = self._write(tmp_path, [c.model_dump() for c in discovered])
 
-        assert get_test_cases(source="local", path=path) == discovered
+        assert setup_test_cases(source="local", path=path) == discovered
 
     def test_makes_no_network_call(self, tmp_path, post):
         path = self._write(tmp_path, [{"evals": {"hallucination": "minor"}}])
 
-        get_test_cases(source="local", path=path)
+        setup_test_cases(source="local", path=path)
 
         assert post["calls"] == []
 
     def test_empty_array_gives_no_cases(self, tmp_path):
-        assert get_test_cases(source="local", path=self._write(tmp_path, [])) == []
+        assert setup_test_cases(source="local", path=self._write(tmp_path, [])) == []
 
     def test_path_is_required(self):
         with pytest.raises(ValueError, match="'path' is required"):
-            get_test_cases(source="local")
+            setup_test_cases(source="local")
 
     def test_missing_file_raises_naming_the_path(self, tmp_path):
         missing = str(tmp_path / "nope.json")
 
         with pytest.raises(FileNotFoundError, match="nope.json"):
-            get_test_cases(source="local", path=missing)
+            setup_test_cases(source="local", path=missing)
 
     def test_invalid_json_raises_naming_the_path(self, tmp_path):
         path = tmp_path / "bad.json"
         path.write_text("{not json", encoding="utf-8")
 
         with pytest.raises(ValueError, match="bad.json"):
-            get_test_cases(source="local", path=str(path))
+            setup_test_cases(source="local", path=str(path))
 
     def test_top_level_object_is_rejected(self, tmp_path):
         path = self._write(tmp_path, {"evals": {"hallucination": "minor"}})
 
         with pytest.raises(ValueError, match="array of test cases"):
-            get_test_cases(source="local", path=path)
+            setup_test_cases(source="local", path=path)
 
     def test_a_bad_element_names_its_index(self, tmp_path):
         path = self._write(tmp_path, [
@@ -601,7 +601,7 @@ class TestLocalSource:
         ])
 
         with pytest.raises(ValueError, match=r"test case 1\b"):
-            get_test_cases(source="local", path=path)
+            setup_test_cases(source="local", path=path)
 
 
 
@@ -743,7 +743,7 @@ class TestOptionalFactFilter:
 class TestPopulatedFromSpans:
     """Each trace's spans fill in the case: agents, tools, token_limit.
 
-    from_spans does the reading; get_test_cases supplies name, the FactID input
+    from_spans does the reading; setup_test_cases supplies name, the FactID input
     and the evals, so the result is a fully described case rather than a bare
     pointer at a fact.
     """
@@ -1063,7 +1063,7 @@ class TestEvalFilter:
 
 
 class TestEvalFilterThreading:
-    """get_test_cases passes eval_name down as the filter on both paths."""
+    """setup_test_cases passes eval_filter down on both paths."""
 
     @pytest.fixture(name="okahu")
     def okahu_fixture(self, monkeypatch):
