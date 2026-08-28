@@ -21,9 +21,12 @@ BASELINE_TESTCASES = [
     }
 ]
 @pytest.mark.parametrize("testcase", BASELINE_TESTCASES)
-def test_travel_agent_baseline(monocle_trace_asserter:TraceAssertion, testcase):
-    # run agent with given input specified in the testcase
-    monocle_trace_asserter.run_agent(root_agent, "google_adk", testcase=testcase)
+@pytest.mark.asyncio
+async def test_travel_agent_baseline(monocle_trace_asserter:TraceAssertion, testcase):
+    # run agent with given input specified in the testcase. ADK is async-only --
+    # ADKRunner implements run_agent_async and inherits the sync run_agent
+    # placeholder, so the sync form raises NotImplementedError.
+    await monocle_trace_asserter.run_agent_async(root_agent, "google_adk", testcase=testcase)
 
     # assert that the output tokens in the testcase are present in the agent's output
     monocle_trace_asserter.contains_output(testcase=testcase)
