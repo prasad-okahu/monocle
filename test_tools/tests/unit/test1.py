@@ -16,7 +16,7 @@ BASELINE_TESTCASES = [
     {
         "input": "Book a flight from San Francisco to Los Angeles for 26th Nov 2025",
         "expected" : {
-            "output" : ["Booked flight", "Mumbai", "Los Angeles"],
+            "output" : ["Booked flight", "Los Angeles"],
         }
     }
 ]
@@ -29,5 +29,5 @@ def test_travel_agent_baseline(monocle_trace_asserter:TraceAssertion, testcase):
     monocle_trace_asserter.contains_output(testcase=testcase)
 
     # additional assertions beyond what's in the testcase
-    monocle_trace_asserter.called_tool(tool_name="flight_tool", agent_name="fligh_booking_agent")
-    monocle_trace_asserter.called_agent(agent_name="supervisor")
+    monocle_trace_asserter.called_tool(tool_name="adk_book_flight_5", agent_name="adk_flight_booking_agent_5")
+    monocle_trace_asserter.called_agent(agent_name="adk_supervisor_agent_5")
