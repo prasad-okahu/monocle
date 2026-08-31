@@ -335,7 +335,8 @@ class SpanHandler:
             if type_env in os.environ:
                 span.set_attribute(f"entity.{span_index}.type", f"app_hosting.{type_name}")
                 entity_name_env = service_name_map.get(type_name, "unknown")
-                span.set_attribute(f"entity.{span_index}.name", os.environ.get(entity_name_env, "generic"))
+                name = os.environ.get(entity_name_env) or os.environ.get(type_env, "generic")
+                span.set_attribute(f"entity.{span_index}.name", name)
                 break
 
     @staticmethod

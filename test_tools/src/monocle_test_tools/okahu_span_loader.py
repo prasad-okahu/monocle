@@ -12,9 +12,9 @@ class OkahuSpanLoader:
     """Utility class to load spans from Okahu trace service.
 
     Uses the Okahu REST API:
-        - GET /api/v1/workflows/<wf_name>/traces?duration_fact=<fact>&fact_ids=<id>
-          Get traces matching a fact (e.g. ``agentic_session``).
-        - GET /api/v1/workflows/<wf_name>/traces/<trace_id>/spans
+        - GET /api/v1/apps/<app_name>/traces?duration_fact=<fact>&fact_ids=<id>
+          Get traces matching a fact (e.g. ``agent_sessions``).
+        - GET /api/v1/apps/<app_name>/traces/<trace_id>/spans
           Get spans for a trace, optionally filtered by session.
 
     Base URL defaults to https://api.okahu.co and can be overridden
@@ -24,6 +24,8 @@ class OkahuSpanLoader:
     # Constants
     AGENT_SESSIONS_SCOPE = "agent_sessions"
     OKAHU_BASE_URL = "https://api.okahu.co"
+
+    RESOURCE_NAMESPACES = ("apps", "workflows")
 
     @staticmethod
     def _get_api_base(endpoint: Optional[str] = None) -> str:
@@ -40,6 +42,31 @@ class OkahuSpanLoader:
             "Content-Type": "application/json",
             "x-api-key": key
         }
+
+    @staticmethod
+    def _get_resource(base: str, path_suffix: str, headers: dict,
+                      params: Optional[dict] = None, timeout: int = 30,
+                      context_msg: str = "") -> Any:
+        """GET an application-scoped resource, trying each known namespace.
+
+        ``path_suffix`` is everything after the application name, e.g.
+        ``"traces"`` or ``"traces/<id>/spans"``. Only a 404 moves on to the next
+        namespace; any other error is the caller's to see.
+        """
+        last_error: Optional[requests.HTTPError] = None
+        for namespace in OkahuSpanLoader.RESOURCE_NAMESPACES:
+            url = f"{base}/api/v1/{namespace}/{path_suffix}"
+            try:
+                return OkahuSpanLoader._do_get(
+                    url, headers, params=params, timeout=timeout, context_msg=context_msg
+                )
+            except requests.HTTPError as exc:
+                status = getattr(getattr(exc, "response", None), "status_code", None)
+                if status != 404:
+                    raise
+                logger.debug("Okahu %r namespace returned 404 for %s", namespace, path_suffix)
+                last_error = exc
+        raise last_error
 
     @staticmethod
     def _do_get(url: str, headers: dict, params: Optional[dict] = None,
@@ -109,14 +136,13 @@ class OkahuSpanLoader:
         """
         base = OkahuSpanLoader._get_api_base(endpoint)
         headers = OkahuSpanLoader._get_headers(api_key)
-        url = f"{base}/api/v1/workflows/{workflow_name}/traces"
         params = {
             "duration_fact": fact_name,
             "fact_ids": fact_id,
         }
 
-        data = OkahuSpanLoader._do_get(
-            url, headers, params=params, timeout=timeout,
+        data = OkahuSpanLoader._get_resource(
+            base, f"{workflow_name}/traces", headers, params=params, timeout=timeout,
             context_msg=f"traces for {fact_name}='{fact_id}' in workflow '{workflow_name}'"
         )
 
@@ -175,15 +201,14 @@ class OkahuSpanLoader:
 
         base = OkahuSpanLoader._get_api_base(endpoint)
         headers = OkahuSpanLoader._get_headers(api_key)
-        url = f"{base}/api/v1/workflows/{workflow_name}/traces/{trace_id}/spans"
-
         params = {}
         if filter_fact and filter_fact_id:
             params["filter_fact"] = filter_fact
             params["filter_fact_id"] = filter_fact_id
 
-        span_data_list = OkahuSpanLoader._do_get(
-            url, headers, params=params or None, timeout=timeout,
+        span_data_list = OkahuSpanLoader._get_resource(
+            base, f"{workflow_name}/traces/{trace_id}/spans", headers,
+            params=params or None, timeout=timeout,
             context_msg=f"spans for trace_id '{trace_id}' in workflow '{workflow_name}'"
         )
 
