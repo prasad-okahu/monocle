@@ -277,45 +277,80 @@ class OkahuSpanLoader:
         if not fact_ids:
             return []
 
-        evals_by_fact = {}
+        # One bulk call for every fact, so a failure here belongs to all of them
+        # rather than to any one: record it on each and carry on, so the window
+        # still yields a suite that reports the outage instead of no suite.
+        evals_by_fact, eval_error = {}, None
         if check_eval:
             # A string names one eval; True asks for every eval the fact level
             # supports, which the report expresses by omitting eval_names.
-            evals_by_fact = OkahuEval._eval_report_by_fact(
-                workflow_name=workflow_name, fact_ids=fact_ids,
-                fact_name=mapped_fact_name, start_time=start_time,
-                end_time=end_time, category=category,
-                eval_name=compare_eval or (
-                    check_eval if isinstance(check_eval, str) else None),
-                name_as=check_eval if compare_eval else None,
-                page_size=page_size)
+            try:
+                evals_by_fact = OkahuEval._eval_report_by_fact(
+                    workflow_name=workflow_name, fact_ids=fact_ids,
+                    fact_name=mapped_fact_name, start_time=start_time,
+                    end_time=end_time, category=category,
+                    eval_name=compare_eval or (
+                        check_eval if isinstance(check_eval, str) else None),
+                    name_as=check_eval if compare_eval else None,
+                    page_size=page_size)
+            except cls._LOAD_ERRORS as exc:
+                eval_error = f"could not load evals for the window: {exc}"
+                logger.warning("setup_test_cases: %s", eval_error)
 
-        test_cases = []
+        test_cases, dropped, failed = [], 0, 0
         for fact_id in fact_ids:
+            fact = FactID(fact_id=fact_id, fact_name=fact_name, source="okahu")
+            if eval_error:
+                test_cases.append(FluentTestCase(
+                    name=fact_id, input=fact, load_error=eval_error))
+                failed += 1
+                continue
+
             evals = evals_by_fact.get(fact_id, [])
             if check_eval and not evals:
                 # Asked for a specific eval and this trace has no labelled result
                 # for it. An empty evals list raises in check_eval, so emitting the
-                # case would poison the suite it is meant to feed.
+                # case would poison the suite it is meant to feed. This is a fact
+                # that loaded fine and simply has no such eval -- not a failure.
+                dropped += 1
                 continue
+
             # from_spans reads the agents, tools and token count off the spans;
             # name and input are supplied here. input stays the FactID rather than
             # the recorded prompt from_spans would derive: with_trace_source
             # needs a FactID and run_agent resolves one into the prompt anyway.
-            spans = cls._fact_spans(
-                workflow_name, fact_id, mapped_fact_name=mapped_fact_name,
-                start_time=start_time, end_time=end_time, eval_filter=eval_filter)
-            test_cases.append(FluentTestCase.from_spans(
-                spans,
-                name=fact_id,
-                input=FactID(fact_id=fact_id, fact_name=fact_name, source="okahu"),
-                evals=evals))
+            #
+            # A fact whose spans will not load is emitted carrying the reason
+            # instead of aborting: this runs at collection time, so raising would
+            # cost every other fact in the window its test.
+            try:
+                spans = cls._fact_spans(
+                    workflow_name, fact_id, mapped_fact_name=mapped_fact_name,
+                    start_time=start_time, end_time=end_time, eval_filter=eval_filter)
+            except cls._LOAD_ERRORS as exc:
+                test_cases.append(FluentTestCase(
+                    name=fact_id, input=fact,
+                    load_error=f"could not load spans for fact '{fact_id}': {exc}"))
+                failed += 1
+                continue
 
-        dropped = len(fact_ids) - len(test_cases)
+            test_cases.append(FluentTestCase.from_spans(
+                spans, name=fact_id, input=fact, evals=evals))
+
         if dropped:
             logger.info("setup_test_cases: %d of %d facts had no labelled '%s' eval "
                         "and were dropped", dropped, len(fact_ids), check_eval)
+        if failed:
+            logger.warning("setup_test_cases: %d of %d facts could not be loaded; "
+                           "each is reported as a failing test case",
+                           failed, len(fact_ids))
         return test_cases
+
+    # Errors that mean "this data would not load", as opposed to a bug. The
+    # loaders raise ConnectionError for transport trouble and re-raise
+    # requests.HTTPError for a non-404 status; the eval report raises
+    # AssertionError. Anything else is left to propagate.
+    _LOAD_ERRORS = (AssertionError, ConnectionError, requests.RequestException, ValueError)
 
     @classmethod
     def _fact_spans(cls, workflow_name, fact_id, *, mapped_fact_name,

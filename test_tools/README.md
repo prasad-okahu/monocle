@@ -623,6 +623,17 @@ Since these cases carry agents and tools as well as evals, they feed the selecto
 
 Each fact costs a request for its spans, plus one per fact above trace level to find its traces, plus one for the report. A wide window is a lot of calls — freeze the result to JSON if you will re-run it.
 
+**A fact that will not load does not cost you the window.** `setup_test_cases` runs at collection time, so raising would mean *no* tests run at all. Instead the fact is still returned, carrying the reason, and the first `testcase=` call it reaches fails with it — so it shows up as one failing test named after the fact while every other case runs normally. The bulk eval report is one call for all facts, so if *it* fails the reason is recorded against each of them.
+
+```
+test_regression[642dbd9d…]  PASSED
+test_regression[9ade6084…]  FAILED
+    testcase '9ade6084…' could not be loaded, so it cannot be asserted on:
+    could not load spans for fact '9ade6084…': Okahu returned HTTP 404
+```
+
+This is distinct from a fact being *dropped*: with `check_eval` set, a fact that loaded fine but has no label for that eval is simply not part of the suite, and is logged rather than reported.
+
 ### Three flows this enables
 
 **Eval regression** — do the recorded labels still reproduce? Cases carry each fact and the label it already has; re-running the eval must agree.
