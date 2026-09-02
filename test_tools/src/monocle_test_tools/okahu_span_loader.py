@@ -27,6 +27,11 @@ class OkahuSpanLoader:
 
     RESOURCE_NAMESPACES = ("apps", "workflows")
 
+    # Okahu calls can be slow: a fact above trace level fans out over several
+    # traces, and the eval report paginates. 120s is the floor that stopped
+    # those timing out; OKAHU_API_TIMEOUT raises or lowers it per deployment.
+    DEFAULT_API_TIMEOUT = 120
+
     @staticmethod
     def _get_api_base(endpoint: Optional[str] = None) -> str:
         """Return the Okahu API base URL (no trailing slash).
@@ -38,6 +43,36 @@ class OkahuSpanLoader:
         """
         return (endpoint or os.environ.get("OKAHU_API_ENDPOINT")
                 or OkahuSpanLoader.OKAHU_BASE_URL).rstrip("/")
+
+    @staticmethod
+    def _resolve_timeout(timeout: Optional[int] = None) -> int:
+        """Seconds to allow a request: explicit argument, else env, else default.
+
+        Every caller defaults ``timeout`` to None rather than to a number, which
+        is what makes the precedence expressible -- a numeric default would be
+        indistinguishable from a caller asking for that number, and would
+        silently outrank OKAHU_API_TIMEOUT.
+
+        An unusable value in the environment (empty, non-numeric, or not a
+        positive integer) is logged and ignored: a misconfigured variable should
+        not stop span loading.
+        """
+        if timeout is not None:
+            return timeout
+
+        raw = (os.environ.get("OKAHU_API_TIMEOUT") or "").strip()
+        if not raw:
+            return OkahuSpanLoader.DEFAULT_API_TIMEOUT
+        try:
+            seconds = int(raw)
+        except ValueError:
+            seconds = 0
+        if seconds <= 0:
+            logger.warning(
+                "OKAHU_API_TIMEOUT=%r is not a positive integer; using %ds",
+                raw, OkahuSpanLoader.DEFAULT_API_TIMEOUT)
+            return OkahuSpanLoader.DEFAULT_API_TIMEOUT
+        return seconds
 
     @staticmethod
     def _get_headers(api_key: Optional[str] = None) -> dict:
@@ -52,7 +87,7 @@ class OkahuSpanLoader:
 
     @staticmethod
     def _get_resource(base: str, path_suffix: str, headers: dict,
-                      params: Optional[dict] = None, timeout: int = 30,
+                      params: Optional[dict] = None, timeout: Optional[int] = None,
                       context_msg: str = "") -> Any:
         """GET an application-scoped resource, trying each known namespace.
 
@@ -77,10 +112,11 @@ class OkahuSpanLoader:
 
     @staticmethod
     def _do_get(url: str, headers: dict, params: Optional[dict] = None,
-                timeout: int = 30, context_msg: str = "") -> Any:
+                timeout: Optional[int] = None, context_msg: str = "") -> Any:
         """Execute a GET request with standard error handling."""
         try:
-            response = requests.get(url=url, headers=headers, params=params, timeout=timeout)
+            response = requests.get(url=url, headers=headers, params=params,
+                                    timeout=OkahuSpanLoader._resolve_timeout(timeout))
             response.raise_for_status()
         except requests.Timeout as exc:
             raise ConnectionError(f"Okahu request timed out ({context_msg}): {exc}") from exc
@@ -381,7 +417,7 @@ class OkahuSpanLoader:
         fact_name: str,
         endpoint: Optional[str] = None,
         api_key: Optional[str] = None,
-        timeout: int = 30,
+        timeout: Optional[int] = None,
         *,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
@@ -409,7 +445,8 @@ class OkahuSpanLoader:
                 mapped -- this goes straight into the URL path.
             endpoint: Okahu API base URL override.
             api_key: Okahu API key override.
-            timeout: Request timeout in seconds.
+            timeout: Request timeout in seconds. Defaults to
+                OKAHU_API_TIMEOUT, then ``DEFAULT_API_TIMEOUT`` (120).
             start_time: Optional window start.
             end_time: Optional window end.
             eval_filter: Optional ``eval`` filter narrowing the result set to
@@ -449,7 +486,7 @@ class OkahuSpanLoader:
         fact_id: Optional[str] = None,
         endpoint: Optional[str] = None,
         api_key: Optional[str] = None,
-        timeout: int = 30,
+        timeout: Optional[int] = None,
         *,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
@@ -474,7 +511,8 @@ class OkahuSpanLoader:
                 ``name:label;name:label`` form.
             endpoint: Okahu API base URL override.
             api_key: Okahu API key override.
-            timeout: Request timeout in seconds.
+            timeout: Request timeout in seconds. Defaults to
+                OKAHU_API_TIMEOUT, then ``DEFAULT_API_TIMEOUT`` (120).
 
         Returns:
             A list of trace ID strings.
@@ -529,7 +567,7 @@ class OkahuSpanLoader:
         filter_fact_id: Optional[str] = None,
         endpoint: Optional[str] = None,
         api_key: Optional[str] = None,
-        timeout: int = 30,
+        timeout: Optional[int] = None,
         *,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
@@ -547,7 +585,8 @@ class OkahuSpanLoader:
             filter_fact_id: Optional server-side span filter fact value.
             endpoint: Okahu API base URL override.
             api_key: Okahu API key override.
-            timeout: Request timeout in seconds.
+            timeout: Request timeout in seconds. Defaults to
+                OKAHU_API_TIMEOUT, then ``DEFAULT_API_TIMEOUT`` (120).
 
         Returns:
             A list of ReadableSpan instances.
@@ -595,7 +634,7 @@ class OkahuSpanLoader:
         session_id: str,
         endpoint: Optional[str] = None,
         api_key: Optional[str] = None,
-        timeout: int = 60,
+        timeout: Optional[int] = None,
     ) -> List[ReadableSpan]:
         """Fetch all spans for every trace in a session.
 
@@ -607,7 +646,8 @@ class OkahuSpanLoader:
             session_id: The agent session ID.
             endpoint: Okahu API base URL override.
             api_key: Okahu API key override.
-            timeout: Request timeout in seconds.
+            timeout: Request timeout in seconds. Defaults to
+                OKAHU_API_TIMEOUT, then ``DEFAULT_API_TIMEOUT`` (120).
 
         Returns:
             A flat list of ReadableSpan instances from all matching traces.
@@ -631,7 +671,7 @@ class OkahuSpanLoader:
         scope_id: str,
         endpoint: Optional[str] = None,
         api_key: Optional[str] = None,
-        timeout: int = 60,
+        timeout: Optional[int] = None,
         *,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
@@ -654,7 +694,8 @@ class OkahuSpanLoader:
             scope_id: The scope/fact value (e.g., session ID, test ID, etc.).
             endpoint: Okahu API base URL override.
             api_key: Okahu API key override.
-            timeout: Request timeout in seconds.
+            timeout: Request timeout in seconds. Defaults to
+                OKAHU_API_TIMEOUT, then ``DEFAULT_API_TIMEOUT`` (120).
 
         Returns:
             A flat list of ReadableSpan instances from all matching traces.
