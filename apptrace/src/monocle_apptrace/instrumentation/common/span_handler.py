@@ -12,6 +12,7 @@ from monocle_apptrace.instrumentation.common.constants import (
     HTTP_HEALTH_CHECK_METHODS,
     HTTP_HEALTH_CHECK_ROUTES,
     HTTP_HEALTH_CHECK_ROUTES_ENV,
+    HTTP_ROOT_ROUTE,
     QUERY,
     service_name_map,
     service_type_map,
@@ -436,10 +437,10 @@ class NonFrameworkSpanHandler(SpanHandler):
 
 class HttpSpanHandler(SpanHandler):
     sample_health_checks:bool = os.environ.get("MONOCLE_SAMPLE_HEALTH_CHECKS", "true").lower() == "true"
-    health_check_routes:list[str] = [route.strip().rstrip("/").lower()
+    health_check_routes:list[str] = [route.strip().rstrip("/").lower() or HTTP_ROOT_ROUTE
                                      for route in os.environ.get(HTTP_HEALTH_CHECK_ROUTES_ENV,
                                                                  ",".join(HTTP_HEALTH_CHECK_ROUTES)).split(",")
-                                     if route.strip().rstrip("/")]
+                                     if route.strip()]
 
     @staticmethod
     def is_health_check_route(span:Span) -> bool:
@@ -451,8 +452,9 @@ class HttpSpanHandler(SpanHandler):
             if not isinstance(value, str) or not value:
                 continue
             path = urlparse(value).path if "://" in value else value.split("?", 1)[0]
-            path = path.rstrip("/").lower()
-            if not path:
+            path = path.rstrip("/").lower() or HTTP_ROOT_ROUTE
+            if path == HTTP_ROOT_ROUTE and attribute == "entity.1.route" \
+                    and span.attributes.get("entity.1.url"):
                 continue
             for route in HttpSpanHandler.health_check_routes:
                 if path == route or path.endswith(route):

@@ -133,6 +133,8 @@ HTTP_HEALTH_CHECK_ROUTES = [
     "/ping",
     "/_health",
 ]
+
+HTTP_ROOT_ROUTE = "/"
 HTTP_HEALTH_CHECK_ROUTES_ENV = "MONOCLE_HEALTH_CHECK_ROUTES"
 
 AGENT_PREFIX_KEY = "monocle.agent.prefix"
