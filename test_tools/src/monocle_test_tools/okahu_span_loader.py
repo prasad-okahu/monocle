@@ -27,6 +27,11 @@ class OkahuSpanLoader:
 
     RESOURCE_NAMESPACES = ("apps", "workflows")
 
+    # Okahu calls can be slow: a fact above trace level fans out over several
+    # traces, and the eval report paginates. 120s is the floor that stopped
+    # those timing out; OKAHU_API_TIMEOUT raises or lowers it per deployment.
+    DEFAULT_API_TIMEOUT = 120
+
     @staticmethod
     def _get_api_base(endpoint: Optional[str] = None) -> str:
         """Return the Okahu API base URL (no trailing slash).
@@ -38,6 +43,36 @@ class OkahuSpanLoader:
         """
         return (endpoint or os.environ.get("OKAHU_API_ENDPOINT")
                 or OkahuSpanLoader.OKAHU_BASE_URL).rstrip("/")
+
+    @staticmethod
+    def _resolve_timeout(timeout: Optional[int] = None) -> int:
+        """Seconds to allow a request: explicit argument, else env, else default.
+
+        Every caller defaults ``timeout`` to None rather than to a number, which
+        is what makes the precedence expressible -- a numeric default would be
+        indistinguishable from a caller asking for that number, and would
+        silently outrank OKAHU_API_TIMEOUT.
+
+        An unusable value in the environment (empty, non-numeric, or not a
+        positive integer) is logged and ignored: a misconfigured variable should
+        not stop span loading.
+        """
+        if timeout is not None:
+            return timeout
+
+        raw = (os.environ.get("OKAHU_API_TIMEOUT") or "").strip()
+        if not raw:
+            return OkahuSpanLoader.DEFAULT_API_TIMEOUT
+        try:
+            seconds = int(raw)
+        except ValueError:
+            seconds = 0
+        if seconds <= 0:
+            logger.warning(
+                "OKAHU_API_TIMEOUT=%r is not a positive integer; using %ds",
+                raw, OkahuSpanLoader.DEFAULT_API_TIMEOUT)
+            return OkahuSpanLoader.DEFAULT_API_TIMEOUT
+        return seconds
 
     @staticmethod
     def _get_headers(api_key: Optional[str] = None) -> dict:
@@ -52,7 +87,7 @@ class OkahuSpanLoader:
 
     @staticmethod
     def _get_resource(base: str, path_suffix: str, headers: dict,
-                      params: Optional[dict] = None, timeout: int = 30,
+                      params: Optional[dict] = None, timeout: Optional[int] = None,
                       context_msg: str = "") -> Any:
         """GET an application-scoped resource, trying each known namespace.
 
@@ -77,10 +112,11 @@ class OkahuSpanLoader:
 
     @staticmethod
     def _do_get(url: str, headers: dict, params: Optional[dict] = None,
-                timeout: int = 30, context_msg: str = "") -> Any:
+                timeout: Optional[int] = None, context_msg: str = "") -> Any:
         """Execute a GET request with standard error handling."""
         try:
-            response = requests.get(url=url, headers=headers, params=params, timeout=timeout)
+            response = requests.get(url=url, headers=headers, params=params,
+                                    timeout=OkahuSpanLoader._resolve_timeout(timeout))
             response.raise_for_status()
         except requests.Timeout as exc:
             raise ConnectionError(f"Okahu request timed out ({context_msg}): {exc}") from exc
@@ -277,45 +313,80 @@ class OkahuSpanLoader:
         if not fact_ids:
             return []
 
-        evals_by_fact = {}
+        # One bulk call for every fact, so a failure here belongs to all of them
+        # rather than to any one: record it on each and carry on, so the window
+        # still yields a suite that reports the outage instead of no suite.
+        evals_by_fact, eval_error = {}, None
         if check_eval:
             # A string names one eval; True asks for every eval the fact level
             # supports, which the report expresses by omitting eval_names.
-            evals_by_fact = OkahuEval._eval_report_by_fact(
-                workflow_name=workflow_name, fact_ids=fact_ids,
-                fact_name=mapped_fact_name, start_time=start_time,
-                end_time=end_time, category=category,
-                eval_name=compare_eval or (
-                    check_eval if isinstance(check_eval, str) else None),
-                name_as=check_eval if compare_eval else None,
-                page_size=page_size)
+            try:
+                evals_by_fact = OkahuEval._eval_report_by_fact(
+                    workflow_name=workflow_name, fact_ids=fact_ids,
+                    fact_name=mapped_fact_name, start_time=start_time,
+                    end_time=end_time, category=category,
+                    eval_name=compare_eval or (
+                        check_eval if isinstance(check_eval, str) else None),
+                    name_as=check_eval if compare_eval else None,
+                    page_size=page_size)
+            except cls._LOAD_ERRORS as exc:
+                eval_error = f"could not load evals for the window: {exc}"
+                logger.warning("setup_test_cases: %s", eval_error)
 
-        test_cases = []
+        test_cases, dropped, failed = [], 0, 0
         for fact_id in fact_ids:
+            fact = FactID(fact_id=fact_id, fact_name=fact_name, source="okahu")
+            if eval_error:
+                test_cases.append(FluentTestCase(
+                    name=fact_id, input=fact, load_error=eval_error))
+                failed += 1
+                continue
+
             evals = evals_by_fact.get(fact_id, [])
             if check_eval and not evals:
                 # Asked for a specific eval and this trace has no labelled result
                 # for it. An empty evals list raises in check_eval, so emitting the
-                # case would poison the suite it is meant to feed.
+                # case would poison the suite it is meant to feed. This is a fact
+                # that loaded fine and simply has no such eval -- not a failure.
+                dropped += 1
                 continue
+
             # from_spans reads the agents, tools and token count off the spans;
             # name and input are supplied here. input stays the FactID rather than
             # the recorded prompt from_spans would derive: with_trace_source
             # needs a FactID and run_agent resolves one into the prompt anyway.
-            spans = cls._fact_spans(
-                workflow_name, fact_id, mapped_fact_name=mapped_fact_name,
-                start_time=start_time, end_time=end_time, eval_filter=eval_filter)
-            test_cases.append(FluentTestCase.from_spans(
-                spans,
-                name=fact_id,
-                input=FactID(fact_id=fact_id, fact_name=fact_name, source="okahu"),
-                evals=evals))
+            #
+            # A fact whose spans will not load is emitted carrying the reason
+            # instead of aborting: this runs at collection time, so raising would
+            # cost every other fact in the window its test.
+            try:
+                spans = cls._fact_spans(
+                    workflow_name, fact_id, mapped_fact_name=mapped_fact_name,
+                    start_time=start_time, end_time=end_time, eval_filter=eval_filter)
+            except cls._LOAD_ERRORS as exc:
+                test_cases.append(FluentTestCase(
+                    name=fact_id, input=fact,
+                    load_error=f"could not load spans for fact '{fact_id}': {exc}"))
+                failed += 1
+                continue
 
-        dropped = len(fact_ids) - len(test_cases)
+            test_cases.append(FluentTestCase.from_spans(
+                spans, name=fact_id, input=fact, evals=evals))
+
         if dropped:
             logger.info("setup_test_cases: %d of %d facts had no labelled '%s' eval "
                         "and were dropped", dropped, len(fact_ids), check_eval)
+        if failed:
+            logger.warning("setup_test_cases: %d of %d facts could not be loaded; "
+                           "each is reported as a failing test case",
+                           failed, len(fact_ids))
         return test_cases
+
+    # Errors that mean "this data would not load", as opposed to a bug. The
+    # loaders raise ConnectionError for transport trouble and re-raise
+    # requests.HTTPError for a non-404 status; the eval report raises
+    # AssertionError. Anything else is left to propagate.
+    _LOAD_ERRORS = (AssertionError, ConnectionError, requests.RequestException, ValueError)
 
     @classmethod
     def _fact_spans(cls, workflow_name, fact_id, *, mapped_fact_name,
@@ -346,7 +417,7 @@ class OkahuSpanLoader:
         fact_name: str,
         endpoint: Optional[str] = None,
         api_key: Optional[str] = None,
-        timeout: int = 30,
+        timeout: Optional[int] = None,
         *,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
@@ -374,7 +445,8 @@ class OkahuSpanLoader:
                 mapped -- this goes straight into the URL path.
             endpoint: Okahu API base URL override.
             api_key: Okahu API key override.
-            timeout: Request timeout in seconds.
+            timeout: Request timeout in seconds. Defaults to
+                OKAHU_API_TIMEOUT, then ``DEFAULT_API_TIMEOUT`` (120).
             start_time: Optional window start.
             end_time: Optional window end.
             eval_filter: Optional ``eval`` filter narrowing the result set to
@@ -414,7 +486,7 @@ class OkahuSpanLoader:
         fact_id: Optional[str] = None,
         endpoint: Optional[str] = None,
         api_key: Optional[str] = None,
-        timeout: int = 30,
+        timeout: Optional[int] = None,
         *,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
@@ -439,7 +511,8 @@ class OkahuSpanLoader:
                 ``name:label;name:label`` form.
             endpoint: Okahu API base URL override.
             api_key: Okahu API key override.
-            timeout: Request timeout in seconds.
+            timeout: Request timeout in seconds. Defaults to
+                OKAHU_API_TIMEOUT, then ``DEFAULT_API_TIMEOUT`` (120).
 
         Returns:
             A list of trace ID strings.
@@ -494,7 +567,7 @@ class OkahuSpanLoader:
         filter_fact_id: Optional[str] = None,
         endpoint: Optional[str] = None,
         api_key: Optional[str] = None,
-        timeout: int = 30,
+        timeout: Optional[int] = None,
         *,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
@@ -512,7 +585,8 @@ class OkahuSpanLoader:
             filter_fact_id: Optional server-side span filter fact value.
             endpoint: Okahu API base URL override.
             api_key: Okahu API key override.
-            timeout: Request timeout in seconds.
+            timeout: Request timeout in seconds. Defaults to
+                OKAHU_API_TIMEOUT, then ``DEFAULT_API_TIMEOUT`` (120).
 
         Returns:
             A list of ReadableSpan instances.
@@ -560,7 +634,7 @@ class OkahuSpanLoader:
         session_id: str,
         endpoint: Optional[str] = None,
         api_key: Optional[str] = None,
-        timeout: int = 60,
+        timeout: Optional[int] = None,
     ) -> List[ReadableSpan]:
         """Fetch all spans for every trace in a session.
 
@@ -572,7 +646,8 @@ class OkahuSpanLoader:
             session_id: The agent session ID.
             endpoint: Okahu API base URL override.
             api_key: Okahu API key override.
-            timeout: Request timeout in seconds.
+            timeout: Request timeout in seconds. Defaults to
+                OKAHU_API_TIMEOUT, then ``DEFAULT_API_TIMEOUT`` (120).
 
         Returns:
             A flat list of ReadableSpan instances from all matching traces.
@@ -596,7 +671,7 @@ class OkahuSpanLoader:
         scope_id: str,
         endpoint: Optional[str] = None,
         api_key: Optional[str] = None,
-        timeout: int = 60,
+        timeout: Optional[int] = None,
         *,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
@@ -619,7 +694,8 @@ class OkahuSpanLoader:
             scope_id: The scope/fact value (e.g., session ID, test ID, etc.).
             endpoint: Okahu API base URL override.
             api_key: Okahu API key override.
-            timeout: Request timeout in seconds.
+            timeout: Request timeout in seconds. Defaults to
+                OKAHU_API_TIMEOUT, then ``DEFAULT_API_TIMEOUT`` (120).
 
         Returns:
             A flat list of ReadableSpan instances from all matching traces.
